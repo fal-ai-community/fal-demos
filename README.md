@@ -1,156 +1,162 @@
-# Private Model Hosting Demos with Fal
+# Demos for Fal Serverless
 
-Welcome to the Fal Private Serverless model hosting demos! This collection of examples is designed to guide you through the process of deploying various types of machine learning models on the fal platform. Each demo showcases different features and best practices for creating robust, scalable, and user-friendly model APIs. We will explore image generation, 3D object creation, text-to-speech synthesis, text-to-video generation, and music generation.
+Welcome\! This repository is a curated collection of production-ready examples designed to help you master the `fal` SDK and deploy powerful AI models on our serverless platform.
 
-## Core Concepts in fal private deployments 
+Whether you're building a simple text-to-image API or a complex, multi-stage video generation pipeline, these demos provide the patterns and best practices you need. We'll cover everything from image generation and text-to-speech to 3D object creation and music synthesis, showcasing the flexibility and power of Fal.
 
-Before diving into specific demos, let's touch upon some core concepts you'll see repeatedly:
+## Getting Started
 
-* **`fal.App`**: This is the fundamental class you'll use to define your app. It encapsulates your model, its dependencies, and the inference logic. You configure aspects like `name`, `machine_type`, `requirements`, `keep_alive`, `min_concurrency`, and `max_concurrency` directly on this class.
-* **Input and Output Models**: Using `pydantic.BaseModel`, you define structured inputs and outputs for your API. The `Field` object allows you to provide rich metadata like titles, descriptions, examples, and validation rules (e.g., `ge`, `le` for numerical ranges, `Literal` for specific choices). This metadata is automatically used to generate an interactive playground and OpenAPI specification for your model.
-* **`setup()` Method**: This special method within your `fal.App` class is called once when a new worker instance starts. It's the ideal place to load your models, download any necessary assets, and perform one-time initializations. This ensures that these heavy operations don't slow down individual inference requests.
-* **`@fal.endpoint()` Decorator**: This decorator is used to expose methods of your `fal.App` class as HTTP endpoints. You can define multiple endpoints within a single app, each potentially serving a different variant or functionality of your model.
-* **Requirements**: You specify your Python package dependencies in a `requirements` list within the `fal.App` class. It's crucial to pin package versions (e.g., `torch==2.6.0`) and even commit hashes for dependencies installed from Git repositories to ensure consistent and reproducible environments.
-* **Machine Types**: fal offers various machine types (e.g., `GPU-H100`, `M` for CPU-medium). You select the appropriate `machine_type` in your `fal.App` configuration based on your model's computational needs.
-* **Billing**: For many models, especially generative ones, you might want to implement custom billing logic. This can often be done by setting the `x-fal-billable-units` header in the `fastapi.Response` object. The actual cost per unit is configured in your Fal dashboard.
-* **Error Handling**: Fal provides `FieldException` for input validation errors that are nicely displayed in the UI, and you can use FastAPI's `HTTPException` for other types of errors.
-* **`fal.toolkit`**: This toolkit provides helpful utilities for common tasks, such as image handling (`Image`, `ImageSizeInput`), file operations (`File`), and more.
-* **Secrets Management**: For sensitive information like API keys, fal allows you to set secrets (e.g., via `fal secrets set MY_SECRET_KEY <value>`) which can then be accessed as environment variables within your app.
-* **Custom Docker Images**: For complex dependencies that go beyond Python packages (e.g., system libraries via `apt-get`), fal supports deploying applications using custom Docker images.
+1.  **Sign up for Fal:** If you haven't already, create an account at [fal.ai](https://fal.ai).
+2.  **Install the Client:**
+    ```bash
+    pip install fal
+    ```
+3.  **Authenticate:**
+    ```bash
+    fal auth login
+    ```
+4.  **Clone this Repository:**
+    ```bash
+    git clone <repository_url>
+    cd <repository_directory>
+    ```
 
-Now, let's explore each demo in detail.
+## Core Concepts of the Fal SDK
 
----
+Before diving into the demos, let's review the fundamental building blocks of a `fal` application. You'll see these concepts in every example.
 
-## 1. Image Generation with Sana
+| Concept | Description |
+| :--- | :--- |
+| **`fal.App`** | The heart of your application. This class defines the entire serverless environment, including the `machine_type`, Python `requirements`, concurrency settings (`min_concurrency`, `max_concurrency`), and `keep_alive` duration. |
+| **`pydantic.BaseModel`** | Defines the structured `input` and `output` schemas for your API. Using `pydantic.Field`, you can add rich metadata (descriptions, examples, validation rules) that automatically powers your API's interactive playground. |
+| **`setup()` method** | A special method in your `fal.App` class that runs **once** when a new worker instance boots up. This is the perfect place for heavy, one-time operations like downloading and loading your ML models into memory. |
+| **`@fal.endpoint()` decorator** | Exposes a method within your `fal.App` class as a secure, scalable HTTP endpoint. A single app can have multiple endpoints. |
+| **`fal.toolkit`** | A collection of high-level utilities that simplify common tasks. Includes helpers for handling images (`fal.toolkit.Image`), files (`fal.toolkit.File`), cloning Git repositories, and more. |
+| **Secrets Management** | Securely manage API keys and other credentials using `fal secrets set MY_KEY <value>`. These are exposed as environment variables within your running application. |
+| **Custom Docker Images** | For applications with complex system-level dependencies (e.g., `ffmpeg`, `apt-get` packages), `fal` supports deploying from a custom `Dockerfile` or Dockerfile string. |
 
-The [`fal_demos/image/sana.py`](fal_demos/image/sana.py) demo showcases how to host a text-to-image generation model, specifically using the Sana and SanaSprint pipelines. It demonstrates robust input/output definitions, model loading, safety checking, and custom billing.
+-----
 
-**Overview**:
-This application provides two endpoints for generating images from text prompts: a standard quality endpoint and a "sprint" endpoint optimized for faster generation with fewer inference steps.
+## The Demos
 
-**Key fal Concepts Demonstrated**:
+Each demo is a self-contained application that highlights specific features and design patterns.
 
-The definition of input data structures is a crucial first step. The `BaseInput` class, found at [`fal_demos/image/sana.py#L13`](fal_demos/image/sana.py#L13), serves as a common foundation for image generation parameters. Each field, like `prompt` ([`fal_demos/image/sana.py#L15`](fal_demos/image/sana.py#L15)) or `num_inference_steps` ([`fal_demos/image/sana.py#L31`](fal_demos/image/sana.py#L31)), is defined using `pydantic.Field`, complete with titles, descriptions, and illustrative examples. This significantly enhances the usability of the auto-generated API playground. For instance, the `image_size` field ([`fal_demos/image/sana.py#L26`](fal_demos/image/sana.py#L26)) utilizes `ImageSizeInput` from `fal.toolkit.image`, which is then converted to an `ImageSize` object internally.
+### 1\. Advanced Text-to-Image with Sana
 
-The application defines specific input models for its two endpoints: `TextToImageInput` ([`fal_demos/image/sana.py#L65`](fal_demos/image/sana.py#L65)) for the standard generation and `SprintInput` ([`fal_demos/image/sana.py#L69`](fal_demos/image/sana.py#L69)) for the faster "sprint" version. The `SprintInput` class inherits from `BaseInput` but overrides `num_inference_steps` with a different default and validation range suitable for quicker inference.
+This demo hosts the Sana text-to-image model and demonstrates how to build a robust, user-friendly API with multiple endpoints and custom billing.
 
-Similarly, output structures are defined with `SanaOutput` ([`fal_demos/image/sana.py#L78`](fal_demos/image/sana.py#L78)) and `SanaSprintOutput` ([`fal_demos/image/sana.py#L95`](fal_demos/image/sana.py#L95)). These classes specify the format of the response, including a list of generated `Image` objects, also from `fal.toolkit.image`, and other metadata like the `seed` used.
+  * **File:** [`fal_demos/image/sana.py`](https://www.google.com/search?q=fal_demos/image/sana.py)
+  * **What You'll Learn:**
+      * Defining rich API schemas with `pydantic`.
+      * Creating multiple endpoints (`/` and `/sprint`) from a single `fal.App`.
+      * Efficiently loading multiple model variants in `setup()`.
+      * Pinning dependencies (including Git commits) for reproducible builds.
+      * Implementing custom, usage-based billing with response headers.
+      * Integrating safety checkers and helper utilities from `fal.toolkit`.
 
-The core of the application is the `Sana` class ([`fal_demos/image/sana.py#L111`](fal_demos/image/sana.py#L111)), which inherits from `fal.App`. Here, serverless execution parameters are configured: `keep_alive=600` ensures a worker stays warm for 10 minutes after the last request, `min_concurrency=0` allows the app to scale down to zero workers, `max_concurrency=10` limits the number of concurrent workers, and `name="sana"` defines the application's name, influencing its endpoint URL.
+#### Code Walkthrough
 
-Dependencies are explicitly listed in the `requirements` attribute ([`fal_demos/image/sana.py#L119`](fal_demos/image/sana.py#L119)), including `torch`, `diffusers` (pinned to a specific commit hash for stability), and other necessary packages. The `local_python_modules` attribute ([`fal_demos/image/sana.py#L126`](fal_demos/image/sana.py#L126)) ensures that local modules like `fal_demos` are correctly packaged. The application specifies `machine_type = "GPU-H100"` ([`fal_demos/image/sana.py#L128`](fal_demos/image/sana.py#L128)) to leverage powerful GPU acceleration.
+The application defines structured inputs like `TextToImageInput` ([L65](https://www.google.com/search?q=fal_demos/image/sana.py%23L65)) and outputs like `SanaOutput` ([L78](https://www.google.com/search?q=fal_demos/image/sana.py%23L78)) using Pydantic. Notice how `Field` objects are used to provide examples and validation, and `fal.toolkit.ImageSizeInput` ([L26](https://www.google.com/search?q=fal_demos/image/sana.py%23L26)) simplifies handling image dimensions.
 
-The model loading logic resides in the `setup()` method ([`fal_demos/image/sana.py#L129`](fal_demos/image/sana.py#L129)). Inside this method, `SanaPipeline` and `SanaSprintPipeline` are imported and initialized. Notably, the text encoder from the base `SanaPipeline` is reused for the `SanaSprintPipeline` ([`fal_demos/image/sana.py#L142`](fal_demos/image/sana.py#L142)) to optimize memory usage and loading time. These initialized pipelines are stored in `self.pipes` for access during inference.
+The `Sana` class ([L111](https://www.google.com/search?q=fal_demos/image/sana.py%23L111)) configures the serverless environment, setting `keep_alive`, concurrency limits, and the `GPU-H100` `machine_type` ([L128](https://www.google.com/search?q=fal_demos/image/sana.py%23L128)). In `setup()` ([L129](https://www.google.com/search?q=fal_demos/image/sana.py%23L129)), both the standard and sprint pipelines are loaded, with the sprint version reusing the base model's text encoder to save memory ([L142](https://www.google.com/search?q=fal_demos/image/sana.py%23L142)).
 
-A private helper method, `_generate()` ([`fal_demos/image/sana.py#L148`](fal_demos/image/sana.py#L148)), encapsulates the common image generation logic for both endpoints. This method handles input preprocessing, seed generation, model invocation, and postprocessing. An important aspect demonstrated here is the safety checker integration using `postprocess_images` from `fal.toolkit.image.safety_checker` ([`fal_demos/image/sana.py#L176`](fal_demos/image/sana.py#L176)).
+A private `_generate()` method ([L148](https://www.google.com/search?q=fal_demos/image/sana.py%23L148)) encapsulates the core logic. Custom billing is calculated based on image resolution and passed via the `x-fal-billable-units` header ([L181-L186](https://www.google.com/search?q=fal_demos/image/sana.py%23L181-L186)). Finally, two public endpoints, `generate` ([L198](https://www.google.com/search?q=fal_demos/image/sana.py%23L198)) and `generate_sprint` ([L207](https://www.google.com/search?q=fal_demos/image/sana.py%23L207)), are exposed.
 
-Custom billing is implemented by calculating `resolution_factor` based on the image dimensions and then setting the `x-fal-billable-units` header on the `fastapi.Response` object ([`fal_demos/image/sana.py#L181-L186`](fal_demos/image/sana.py#L181-L186)).
+-----
 
-Finally, two public endpoints are defined: `generate` at the root path ([`fal_demos/image/sana.py#L198`](fal_demos/image/sana.py#L198)) and `generate_sprint` at the `/sprint` path ([`fal_demos/image/sana.py#L207`](fal_demos/image/sana.py#L207)). Both endpoints utilize the `_generate` method, passing the appropriate input model and model identifier.
+### 2\. Proxying APIs & Managing Secrets with Hunyuan3D
 
-The comments at the end of the file ([`fal_demos/image/sana.py#L214-L219`](fal_demos/image/sana.py#L214-L219)) provide instructions on how to run the app using `fal run` and example URLs for testing the deployed endpoints.
+This demo illustrates a common pattern: creating a "proxy" or "wrapper" application that calls another Fal function. This is perfect for adding a simplified interface, custom logic, or authentication layer on top of an existing model.
 
----
+  * **File:** [`fal_demos/image/hunyuan3d.py`](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py)
+  * **What You'll Learn:**
+      * Using the `fal_client` to call other Fal functions asynchronously (`fal_client.submit_async`).
+      * Managing API keys with `fal secrets`.
+      * Handling I/O-bound concurrency with `max_multiplexing`.
+      * Streaming real-time logs and results from a background job.
+      * Implementing robust error handling for client-side exceptions.
 
-## 2. 3D Object Generation with Hunyuan3D (via Fal Client)
+#### Code Walkthrough
 
-The [`fal_demos/image/hunyuan3d.py`](fal_demos/image/hunyuan3d.py) demo illustrates a different pattern: hosting a "proxy" application that, in turn, calls another pre-existing Fal function (in this case, `fal-ai/hunyuan3d`) to perform the actual 3D model generation. This is useful for adding custom preprocessing, postprocessing, or simplified interfaces around existing models.
+The `setup()` method ([L72](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L72)) shows how to retrieve a secret (`MY_SECRET_KEY`) from environment variables to authenticate the `fal_client`. The `max_multiplexing=10` setting ([L67](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L67)) allows a single worker to efficiently handle up to 10 concurrent requests that are waiting on the downstream API.
 
-**Overview**:
-This application takes an input image URL and parameters, submits a job to an internal Hunyuan3D model on Fal, and then streams back the results, including the generated 3D object file.
+The `generate_image` endpoint ([L77](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L77)) uses `fal_client.submit_async` ([L80](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L80)) to trigger the `fal-ai/hunyuan3d` model. It then iterates over the job's events with `handle.iter_events` ([L90](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L90)) to stream progress. The extensive `try-except` block ([L102-L120](https://www.google.com/search?q=fal_demos/image/hunyuan3d.py%23L102-L120)) demonstrates how to handle `FieldException`, `HTTPStatusError`, and `FalClientError` gracefully.
 
-**Key fal Concepts Demonstrated**:
+-----
 
-The input parameters for the 3D generation are defined in the `Hunyuan3DInput` model ([`fal_demos/image/hunyuan3d.py#L9`](fal_demos/image/hunyuan3d.py#L9)), including the `input_image_url`, whether to generate a `textured_mesh`, and other model-specific settings. The `ObjectOutput` model ([`fal_demos/image/hunyuan3d.py#L49`](fal_demos/image/hunyuan3d.py#L49)) describes the expected output, primarily a `File` object representing the 3D mesh.
+### 3\. Multi-Language Text-to-Speech with Kokoro
 
-The `Hunyuan3D` class ([`fal_demos/image/hunyuan3d.py#L65`](fal_demos/image/hunyuan3d.py#L65)) is configured with `max_multiplexing=10`. This setting allows a single worker instance to handle up to 10 concurrent requests by interleaving their processing, which is particularly efficient for I/O-bound tasks or when waiting for other services.
+This demo hosts the Kokoro TTS model, showcasing how to serve multiple languages and voice options from a single application on a CPU worker.
 
-A key feature demonstrated is the use of Fal secrets. The `setup()` method ([`fal_demos/image/hunyuan3d.py#L72`](fal_demos/image/hunyuan3d.py#L72)) retrieves a secret key named `MY_SECRET_KEY` from environment variables and sets it as `FAL_KEY`. This is a common pattern for authenticating with other services or Fal functions. The comment indicates how to set this secret using the `fal secrets set` command.
+  * **File:** [`fal_demos/tts/kokoro.py`](https://www.google.com/search?q=fal_demos/tts/kokoro.py)
+  * **What You'll Learn:**
+      * Managing multiple model variants (one for each language) within one app.
+      * Using `typing.Literal` to create constrained, dropdown-style inputs in the UI.
+      * Deploying to CPU-only machine types (`"L"`).
+      * Handling audio data and returning it as a `fal.toolkit.File`.
+      * Validating input length and providing user-friendly errors with `FieldException`.
 
-The main logic is within the `generate_image` endpoint ([`fal_demos/image/hunyuan3d.py#L77`](fal_demos/image/hunyuan3d.py#L77)). This function uses `fal_client.submit_async` ([`fal_demos/image/hunyuan3d.py#L80`](fal_demos/image/hunyuan3d.py#L80)) to make an asynchronous call to the `fal-ai/hunyuan3d/v2/mini/turbo` function, passing along the user-provided arguments.
+#### Code Walkthrough
 
-The application then iterates over events from the submitted job using `handle.iter_events` ([`fal_demos/image/hunyuan3d.py#L90`](fal_demos/image/hunyuan3d.py#L90)). This allows for real-time feedback, printing status updates like "Queued" or "InProgress" along with any logs.
+This app defines distinct input models for each language, such as `AmEnglishRequest` ([L9](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L9)). The `voice` field uses `typing.Literal` ([L21](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L21)) to provide a fixed list of valid choices. In `setup()` ([L143](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L143)), a dictionary of `kokoro.KPipeline` instances is created, loading a model for each language.
 
-Comprehensive error handling for the Fal client interaction is shown in the `try-except` block ([`fal_demos/image/hunyuan3d.py#L102-L120`](fal_demos/image/hunyuan3d.py#L102-L120)). It catches `FieldException` (for user input errors), `HTTPStatusError` (for network issues during the call), and `fal_client.client.FalClientError` (for other errors from the Fal platform). For user errors, it re-raises them as an `HTTPException` with a 400 status code, and for server errors, a 500 status code, providing meaningful error messages to the client.
+The `_generate()` method ([L149](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L149)) contains the shared logic. It validates prompt length ([L154](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L154)), selects the correct pipeline, and generates the audio. The output audio is saved to a temporary WAV file and returned as a `fal.toolkit.File` with the correct `content_type` ([L176-L180](https://www.google.com/search?q=fal_demos/tts/kokoro.py%23L176-L180)), which Fal can serve efficiently from its CDN.
 
----
+-----
 
-## 3. Text-to-Speech with Kokoro
+### 4\. Complex Workflows with Wan Text-to-Video
 
-The [`fal_demos/tts/kokoro.py`](fal_demos/tts/kokoro.py) demo focuses on hosting a text-to-speech (TTS) model, Kokoro, which supports multiple languages and voices. It demonstrates how to manage different input schemas for various language options and how to load multiple model variants.
+This text-to-video demo tackles a more complex scenario, composing multiple Fal functions to create a feature-rich pipeline that includes prompt safety checks and automatic prompt enhancement.
 
-**Overview**:
-This application provides several TTS endpoints, each tailored for a specific language or accent (American English, British English, Japanese). Users provide text and select a voice, and the app generates an audio file.
+  * **File:** [`fal_demos/video/wan.py`](https://www.google.com/search?q=fal_demos/video/wan.py)
+  * **What You'll Learn:**
+      * Cloning Git repositories during the `setup` phase with `fal.toolkit.clone_repository`.
+      * Handling complex dependencies, including pre-compiled wheels from URLs.
+      * Orchestrating multiple `fal_client` calls to build advanced features (e.g., prompt safety, prompt expansion).
+      * Managing the Python path and working directory for non-standard library structures.
+      * Handling video file I/O.
 
-**Key fal Concepts Demonstrated**:
+#### Code Walkthrough
 
-To cater to different languages and their specific voices, multiple Pydantic input models are defined: `AmEnglishRequest` ([`fal_demos/tts/kokoro.py#L9`](fal_demos/tts/kokoro.py#L9)), `BrEnglishRequest` ([`fal_demos/tts/kokoro.py#L48`](fal_demos/tts/kokoro.py#L48)), and `JapaneseRequest` ([`fal_demos/tts/kokoro.py#L71`](fal_demos/tts/kokoro.py#L71)). A notable feature here is the use of `typing.Literal` for the `voice` field in each request model (e.g., [`fal_demos/tts/kokoro.py#L21`](fal_demos/tts/kokoro.py#L21)). This restricts the input to a predefined set of valid voice IDs, providing clear options to the user and simplifying validation. Corresponding output models (`AmEngOutput` ([`fal_demos/tts/kokoro.py#L92`](fal_demos/tts/kokoro.py#L92)), `BrEngOutput`, `JapaneseOutput`) define the structure of the response, which includes an `audio` field of type `fal.toolkit.File`.
+The `setup()` method ([L100](https://www.google.com/search?q=fal_demos/video/wan.py%23L100)) is a great example of a complex initialization. It uses `fal.toolkit.clone_repository` ([L107](https://www.google.com/search?q=fal_demos/video/wan.py%23L107)) to fetch the model's source code, `os.chdir` ([L114](https://www.google.com/search?q=fal_demos/video/wan.py%23L114)) to work within that repository, and `huggingface_hub` to download weights.
 
-The `Kokoro` application class is defined at [`fal_demos/tts/kokoro.py#L125`](fal_demos/tts/kokoro.py#L125). The `requirements` list ([`fal_demos/tts/kokoro.py#L132`](fal_demos/tts/kokoro.py#L132)) includes the `kokoro` library and its language-specific components like `misaki[en]` and `misaki[ja]`, as well as a Spacy model downloaded from a URL. The `machine_type` is set to `"L"` (CPU-Large) ([`fal_demos/tts/kokoro.py#L141`](fal_demos/tts/kokoro.py#L141)), as Kokoro is relatively lightweight and runs efficiently on CPU.
+The key pattern here is composition. Helper methods like `_is_nsfw_prompt` ([L140](https://www.google.com/search?q=fal_demos/video/wan.py%23L140)) and `_expand_prompt` ([L188](https://www.google.com/search?q=fal_demos/video/wan.py%23L188)) call `fal-ai/any-llm` to perform auxiliary tasks. The main `generate_image_to_video` endpoint ([L210](https://www.google.com/search?q=fal_demos/video/wan.py%23L210)) orchestrates these calls before running the core video generation, providing a much richer user experience.
 
-In the `setup()` method ([`fal_demos/tts/kokoro.py#L143`](fal_demos/tts/kokoro.py#L143)), instances of `kokoro.KPipeline` are created for each supported language ("American English", "British English", "Japanese") and stored in a dictionary `self.pipelines`. This pre-loads the necessary models for each language variant.
+-----
 
-The shared TTS generation logic is in the `_generate()` method ([`fal_demos/tts/kokoro.py#L149`](fal_demos/tts/kokoro.py#L149)). This method first checks if the input prompt length exceeds a certain limit (20,000 characters) and raises a `FieldException` if it does ([`fal_demos/tts/kokoro.py#L154-L158`](fal_demos/tts/kokoro.py#L154-L158)), providing user-friendly feedback. It then uses the appropriate pipeline from `self.pipelines` to generate the audio. The generated audio, a NumPy array, is concatenated if produced in chunks.
+### 5\. Custom Environments with DiffRhythm (Docker)
 
-Custom billing is implemented by setting the `x-fal-billable-units` header based on the length of the input prompt, with a minimum of 1 unit and scaling every 1000 characters ([`fal_demos/tts/kokoro.py#L173`](fal_demos/tts/kokoro.py#L173)).
+This demo shows how to deploy a model with heavy system-level dependencies (`ffmpeg`, `espeak-ng`) by defining a custom container environment directly in the Python script.
 
-The generated audio is saved to a temporary WAV file using `soundfile.sf.write`. This temporary file is then returned as a `fal.toolkit.File` object, specifying `content_type="audio/wav"` and `repository="cdn"` to serve it efficiently via Fal's CDN ([`fal_demos/tts/kokoro.py#L176-L180`](fal_demos/tts/kokoro.py#L176-L180)).
+  * **File:** [`fal_demos/audio/diffrhythm.py`](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py)
+  * **What You'll Learn:**
+      * Defining a custom runtime environment using `fal.ContainerImage.from_dockerfile_str`.
+      * Installing system packages (`apt-get`) and Python packages (`pip`) in a Docker context.
+      * Using a `warmup()` method to reduce cold-start latency for the first request.
+      * Downloading model assets on the fly with `fal.toolkit.download_file`.
+      * Providing UI hints (`ui={"widget": "textarea"}`) in Pydantic models for a better playground experience.
 
-Multiple endpoints are defined to serve the different language versions: `/` and `/american-english` ([`fal_demos/tts/kokoro.py#L182`](fal_demos/tts/kokoro.py#L182), [`fal_demos/tts/kokoro.py#L188`](fal_demos/tts/kokoro.py#L188)) for American English, `/british-english` ([`fal_demos/tts/kokoro.py#L194`](fal_demos/tts/kokoro.py#L194)) for British English, and `/japanese` ([`fal_demos/tts/kokoro.py#L200`](fal_demos/tts/kokoro.py#L200)) for Japanese. Each calls the `_generate` method with the appropriate language identifier.
+#### Code Walkthrough
 
----
+The most important feature is the `DOCKER_STRING` ([L112](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py%23L112)), which contains a multi-stage Dockerfile. This string is passed to `fal.ContainerImage.from_dockerfile_str` ([L164](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py%23L164)) to tell Fal to build and use this specific environment.
 
-## 4. Text-to-Video with Wan
+The `setup()` method ([L169](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py%23L169)) clones the model's repository and downloads necessary asset files like `.npy` and `.onnx` models. A `warmup()` method ([L195](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py%23L195)) is defined to pre-run inference, ensuring the model is fully JIT-compiled and ready before serving traffic. The inference logic in `_generate()` ([L206](https://www.google.com/search?q=fal_demos/audio/diffrhythm.py%23L206)) is intricate, handling conditional logic based on user inputs (e.g., using a reference audio URL vs. a text style prompt).
 
-The [`fal_demos/video/wan.py`](fal_demos/video/wan.py) demo tackles a more complex scenario: hosting the Wan text-to-video model. This involves cloning a Git repository, managing model weights, and integrating custom safety and prompt enhancement features by calling other Fal functions.
+## Running the Demos
 
-**Overview**:
-This application allows users to generate short video clips from text prompts using the Wan 2.1 model (1.3B version). It includes optional safety checks and prompt expansion features.
+To deploy and run any of these demos, use the `fal run` command followed by the path to the Python file.
 
-**Key fal Concepts Demonstrated**:
+```bash
+# Example: Deploying the Sana image generation app
+fal run fal_demos/image/sana.py
+```
 
-The `WanT2VRequest` input model ([`fal_demos/video/wan.py#L10`](fal_demos/video/wan.py#L10)) defines parameters such as `prompt`, `negative_prompt`, `aspect_ratio`, and controls for enabling `enable_safety_checker` and `enable_prompt_expansion`. The `WanT2VResponse` model ([`fal_demos/video/wan.py#L67`](fal_demos/video/wan.py#L67)) specifies that the output will be a `video` (as a `File` object) and the `seed` used.
+The CLI will stream the build logs and, upon successful deployment, provide you with the URL to your application's API playground.
 
-The `Wan` application class is defined at [`fal_demos/video/wan.py#L79`](fal_demos/video/wan.py#L79). Its `requirements` list ([`fal_demos/video/wan.py#L86`](fal_demos/video/wan.py#L86)) is extensive, including specific versions of `torch`, `diffusers`, and other libraries, as well as a FlashAttention wheel directly from a GitHub releases URL. This highlights Fal's flexibility in handling diverse dependency sources.
+## Next Steps
 
-The `setup()` method ([`fal_demos/video/wan.py#L100`](fal_demos/video/wan.py#L100)) is particularly involved. It begins by cloning the Wan 2.1 Git repository using `fal.toolkit.clone_repository` ([`fal_demos/video/wan.py#L107`](fal_demos/video/wan.py#L107)). This function clones the repo to a temporary directory (specified as `/tmp/wan-t2v`), pins it to a specific `commit_hash` for reproducibility, and adds the repository's path to `sys.path` (`include_to_path=True`). The current working directory is then changed to this cloned repository's path ([`fal_demos/video/wan.py#L114`](fal_demos/video/wan.py#L114]) because the Wan library scripts expect to be run from their root directory.
+You're now equipped with the patterns to build and deploy almost any AI model on Fal Serverless.
 
-Next, model weights are downloaded from Hugging Face Hub using `huggingface_hub.snapshot_download` ([`fal_demos/video/wan.py#L118`](fal_demos/video/wan.py#L118)). The weights are downloaded to a directory managed by Fal (`FAL_MODEL_WEIGHTS_DIR`) to leverage caching across worker restarts if `local_dir_use_symlinks=True` is effective and the underlying storage persists. Finally, the `WanT2V` model object is initialized using configurations and checkpoints from the cloned repository ([`fal_demos/video/wan.py#L129`](fal_demos/video/wan.py#L129)).
-
-This demo showcases advanced features by calling other Fal functions for auxiliary tasks. The `_is_nsfw_prompt` method ([`fal_demos/video/wan.py#L140`](fal_demos/video/wan.py#L140)) uses `fal_client.subscribe` to call `fal-ai/any-llm` with a system prompt designed to classify the user's text prompt as NSFW or not. Similarly, `_is_nsfw_request` ([`fal_demos/video/wan.py#L158`](fal_demos/video/wan.py#L158)) first uploads an image (if this were an image-to-video model, or a frame from a generated video for post-check) using `fal_client.upload_image` and then calls two different Fal functions (`fal-ai/imageutils/nsfw` and `fal-ai/any-llm/vision`) for a multi-layered NSFW image check. The `_expand_prompt` method ([`fal_demos/video/wan.py#L188`](fal_demos/video/wan.py#L188)) calls `fal-ai/any-llm` with a specific system prompt to enhance and elaborate on the user's original prompt.
-
-The main inference endpoint is `generate_image_to_video` ([`fal_demos/video/wan.py#L210`](fal_demos/video/wan.py#L210]), specifically path-versioned as `/v2.1/1.3b/text-to-video`. Inside this function, if `enable_safety_checker` is true, the `_is_nsfw_prompt` method is called. If `enable_prompt_expansion` is true, `_expand_prompt` is invoked ([`fal_demos/video/wan.py#L213-L217`](fal_demos/video/wan.py#L213-L217)). The Wan T2V model's `generate` method is then called to create the video tensor ([`fal_demos/video/wan.py#L221`](fal_demos/video/wan.py#L221)). The resulting video tensor is saved to a temporary MP4 file using `wan.utils.utils.cache_video`, and this file is returned as a `fal.toolkit.File` ([`fal_demos/video/wan.py#L230-L239`](fal_demos/video/wan.py#L230-L239)).
-
----
-
-## 5. Music Generation with DiffRhythm (Custom Docker Image)
-
-The [`fal_demos/audio/diffrhythm.py`](fal_demos/audio/diffrhythm.py) demo illustrates how to deploy a model that requires system-level dependencies beyond standard Python packages. It achieves this by using a custom Docker image. DiffRhythm generates music based on lyrics and an optional reference audio or style prompt.
-
-**Overview**:
-This application takes lyrics (with timestamps), an optional reference audio URL or style prompt, and other parameters to generate a piece of music using the DiffRhythm model.
-
-**Key fal Concepts Demonstrated**:
-
-The `TextToMusicInput` model ([`fal_demos/audio/diffrhythm.py#L11`](fal_demos/audio/diffrhythm.py#L11)) defines the inputs. The `lyrics` field is notable for its example, which shows a structured format with timestamps, and for its `ui` hint ([`fal_demos/audio/diffrhythm.py#L34`](fal_demos/audio/diffrhythm.py#L34)) suggesting a `textarea` for better user experience in the playground. The `reference_audio_url` also has a `ui={"important": True}` hint ([`fal_demos/audio/diffrhythm.py#L44`](fal_demos/audio/diffrhythm.py#L44)) to prioritize it in the UI. The `Output` model is straightforward, expecting an `audio` `File` ([`fal_demos/audio/diffrhythm.py#L72`](fal_demos/audio/diffrhythm.py#L72)).
-
-A utility function `extract_segments` is defined ([`fal_demos/audio/diffrhythm.py#L88`](fal_demos/audio/diffrhythm.py#L88)) for parsing text with bracketed keys, though the main inference logic uses `get_lrc_token` from the DiffRhythm library for lyrics processing.
-
-The most significant feature of this demo is the use of a custom Docker image. The `DOCKER_STRING` variable ([`fal_demos/audio/diffrhythm.py#L112`](fal_demos/audio/diffrhythm.py#L112)) contains the Dockerfile instructions. It starts `FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel`, then uses `apt-get update && apt-get install -y` to install system packages like `git`, `espeak-ng`, and `ffmpeg`. After that, it installs a long list of Python dependencies using `pip install`.
-
-The `DiffRhythm` application class ([`fal_demos/audio/diffrhythm.py#L162`](fal_demos/audio/diffrhythm.py#L162)) specifies `kind="container"` and uses `image=fal.ContainerImage.from_dockerfile_str(DOCKER_STRING)` to tell Fal Serverless to build and use this custom environment.
-
-Inside the `setup()` method ([`fal_demos/audio/diffrhythm.py#L169`](fal_demos/audio/diffrhythm.py#L169)), the DiffRhythm Hugging Face Space repository is cloned using `clone_repository` ([`fal_demos/audio/diffrhythm.py#L172`](fal_demos/audio/diffrhythm.py#L172)). Specific files, like `negative_prompt.npy` and an ONNX model, are downloaded using `download_file` ([`fal_demos/audio/diffrhythm.py#L179`](fal_demos/audio/diffrhythm.py#L179), [`fal_demos/audio/diffrhythm.py#L186`](fal_demos/audio/diffrhythm.py#L186]) into the cloned repository structure. Finally, the `prepare_model` utility from DiffRhythm is called to load and initialize the various model components (`cfm`, `cfm_full`, `tokenizer`, `muq`, `vae`).
-
-A `warmup()` method ([`fal_demos/audio/diffrhythm.py#L195`](fal_demos/audio/diffrhythm.py#L195)) is included, which calls the internal `_generate` method with a sample input. This is a good practice to ensure the model is fully loaded before handling actual user requests, reducing cold start latency for the first request after a worker starts.
-
-The `_generate()` method ([`fal_demos/audio/diffrhythm.py#L206`](fal_demos/audio/diffrhythm.py#L206)) contains the main inference logic. It first validates that either a `style_prompt` or `reference_audio_url` is provided ([`fal_demos/audio/diffrhythm.py#L209`](fal_demos/audio/diffrhythm.py#L209)). It conditionally loads either the `cfm` or `cfm_full` model based on the requested `music_duration` ([`fal_demos/audio/diffrhythm.py#L221-L226`](fal_demos/audio/diffrhythm.py#L221-L226)). Lyrics are processed using `get_lrc_token`. If a `reference_audio_url` is given, it's downloaded, and `get_audio_style_prompt` is used; otherwise, `get_text_style_prompt` processes the `style_prompt` text ([`fal_demos/audio/diffrhythm.py#L230-L250`](fal_demos/audio/diffrhythm.py#L230-L250)). Error handling within this section uses `FieldException` to report issues related to lyrics, reference audio, or style prompt processing.
-
-The core `inference` function from the DiffRhythm library is then called ([`fal_demos/audio/diffrhythm.py#L253`](fal_demos/audio/diffrhythm.py#L253)). The generated audio is saved to a temporary WAV file within a temporary directory, and custom billing units are calculated based on the audio duration ([`fal_demos/audio/diffrhythm.py#L270`](fal_demos/audio/diffrhythm.py#L270)). The output is returned as a `File` object.
-
-The primary endpoint `/` is defined at [`fal_demos/audio/diffrhythm.py#L274`](fal_demos/audio/diffrhythm.py#L274)}, which simply calls the `_generate` method.
-
----
-
-These demos provide a solid foundation for understanding how to deploy a wide variety of models on fal. By going through them, you can learn how to structure your applications, manage dependencies, handle inputs and outputs effectively, and leverage the platform's features to build powerful and scalable AI services. Remember to consult the official [Fal documentation](docs.fal.ai) for more in-depth information on any of the concepts discussed.
+  * **Dive Deeper:** Explore the official [Fal Documentation](https://docs.fal.ai) for in-depth guides on every feature.
+  * **Experiment:** Modify these demos or start from scratch with your own model.
+  * **Join the Community:** Have questions? Join our [Discord server](https://www.google.com/search?q=https://fal.ai/discord) to chat with the team and other developers.
