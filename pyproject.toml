@@ -23,3 +23,11 @@ kokoro = { auth = "shared", ref = "fal_demos/tts/kokoro.py::Kokoro", no_scale=tr
 diffrhythm = { auth = "shared", ref = "fal_demos/audio/diffrhythm.py::DiffRhythm", no_scale=true }
 wan = { auth = "shared", ref = "fal_demos/video/wan.py::Wan", no_scale=true }
 hunyuan3d = {auth = "shared", ref = "fal_demos/image/hunyuan3d.py::Hunyuan3D", no_scale=true }
+
+# Distributed inference examples
+parallel-sdxl = { auth = "shared", ref = "fal_demos/distributed/inference/parallel_sdxl/app.py::ExampleDistributedApp", no_scale=true }
+xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py::XFuserApp", no_scale=true }
+
+# Distributed training examples
+flux-preprocessor = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp", no_scale=true }
+flux-training = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp", no_scale=true }

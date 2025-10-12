@@ -133,3 +133,6 @@ configurations/
 .DS_Store
 
 /fal_demos/_version.py
+
+
+fal_demos/distributed/training/

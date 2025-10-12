@@ -153,4 +153,111 @@ The primary endpoint `/` is defined at [`fal_demos/audio/diffrhythm.py#L274`](fa
 
 ---
 
-These demos provide a solid foundation for understanding how to deploy a wide variety of models on fal. By going through them, you can learn how to structure your applications, manage dependencies, handle inputs and outputs effectively, and leverage the platform's features to build powerful and scalable AI services. Remember to consult the official [Fal documentation](docs.fal.ai) for more in-depth information on any of the concepts discussed.
+## 6. Distributed Computing Examples
+
+The distributed computing examples demonstrate how to leverage multiple GPUs for both inference and training workloads on the fal platform. These examples are organized into two categories: distributed inference and distributed training.
+
+### Distributed Inference
+
+Distributed inference examples show how to scale inference across multiple GPUs for faster generation or higher throughput.
+
+#### 6.1 Parallel SDXL Inference with DistributedRunner
+
+The [`fal_demos/distributed/inference/parallel_sdxl/app.py`](fal_demos/distributed/inference/parallel_sdxl/app.py) demo showcases data parallelism using `DistributedRunner`. This approach runs independent model instances on each GPU, generating multiple images simultaneously.
+
+**Overview**:
+This application uses `fal.distributed.DistributedRunner` to run Stable Diffusion XL across multiple GPUs. Each GPU generates images independently with different random seeds, and the results are gathered into a grid.
+
+**Key fal Concepts Demonstrated**:
+
+The `ExampleDistributedWorker` class ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L51`](fal_demos/distributed/inference/parallel_sdxl/app.py#L51)) extends `DistributedWorker` and implements the worker logic. In the `setup()` method ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L59`](fal_demos/distributed/inference/parallel_sdxl/app.py#L59)), each worker initializes its own SDXL pipeline on its assigned GPU (`self.device`).
+
+The `__call__` method ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L117`](fal_demos/distributed/inference/parallel_sdxl/app.py#L117)) implements the inference logic. Each worker generates an image independently, and `torch.distributed.gather` ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L153`](fal_demos/distributed/inference/parallel_sdxl/app.py#L153)) collects all images on rank 0 (the main worker).
+
+The `ExampleDistributedApp` class ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L194`](fal_demos/distributed/inference/parallel_sdxl/app.py#L194)) configures the multi-GPU setup with `num_gpus = 2` and initializes the `DistributedRunner` ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L215`](fal_demos/distributed/inference/parallel_sdxl/app.py#L215)) with the worker class and world size.
+
+A streaming endpoint is also provided ([`fal_demos/distributed/inference/parallel_sdxl/app.py#L238`](fal_demos/distributed/inference/parallel_sdxl/app.py#L238)) that demonstrates real-time progress updates during generation using `add_streaming_result`.
+
+**When to use**: Data parallelism is ideal when you need to generate multiple variations simultaneously or achieve higher throughput by processing multiple requests in parallel.
+
+#### 6.2 xFuser Distributed Inference
+
+The [`fal_demos/distributed/inference/xfuser/`](fal_demos/distributed/inference/xfuser/) demo showcases model parallelism using xFuser with Ray. This approach splits the model across GPUs for faster single-image generation.
+
+**Overview**:
+This application uses xFuser's PipeFusion and Ulysses parallelism strategies to distribute a Diffusion Transformer model across multiple GPUs. Unlike data parallelism, model parallelism splits the model itself, allowing faster generation of a single image.
+
+**Key fal Concepts Demonstrated**:
+
+The `XFuserApp` class ([`fal_demos/distributed/inference/xfuser/app.py#L35`](fal_demos/distributed/inference/xfuser/app.py#L35)) configures the application with `num_gpus = 2` and supports various DiT-based models like SD3 Medium, PixArt-Sigma, and HunyuanDiT.
+
+In the `setup()` method ([`fal_demos/distributed/inference/xfuser/app.py#L88`](fal_demos/distributed/inference/xfuser/app.py#L88)), the xFuser distributed engine is initialized using Ray. The xFuser configuration ([`fal_demos/distributed/inference/xfuser/app.py#L159`](fal_demos/distributed/inference/xfuser/app.py#L159)) specifies parallelism strategies:
+- `pipefusion_parallel_degree`: Split model across pipeline stages
+- `ulysses_degree`: Split sequence dimension for attention
+- `use_cfg_parallel`: Parallel classifier-free guidance
+
+The `Engine` class ([`fal_demos/distributed/inference/xfuser/engine.py`](fal_demos/distributed/inference/xfuser/engine.py)) manages Ray actors that run xFuser workers, coordinating distributed inference across GPUs.
+
+**Supported Models**: SD3 Medium (default), SDXL, PixArt-Alpha/Sigma, HunyuanDiT, FLUX.1
+
+**When to use**: Model parallelism is ideal when you need faster generation of individual images, especially for large DiT-based models, or when the model doesn't fit on a single GPU.
+
+### Distributed Training
+
+Distributed training examples demonstrate multi-GPU training patterns using PyTorch DistributedDataParallel (DDP).
+
+#### 6.3 Flux LoRA Training with Multi-GPU Preprocessing and Training
+
+The [`fal_demos/distributed/training/flux_lora/`](fal_demos/distributed/training/flux_lora/) demo showcases a complete, production-ready training pipeline matching [fal.ai/flux-lora-fast-training](https://fal.ai/models/fal-ai/flux-lora-fast-training).
+
+**Overview**:
+This is a complete Flux LoRA training pipeline that accepts raw images in a ZIP file and produces a trained LoRA checkpoint. It includes multi-GPU preprocessing (VAE encoding, caption generation) and multi-GPU training using DDP.
+
+**Key fal Concepts Demonstrated**:
+
+The pipeline consists of two main components:
+
+**Preprocessor** ([`fal_demos/distributed/training/flux_lora/preprocessor/`](fal_demos/distributed/training/flux_lora/preprocessor/)):
+- `FluxPreprocessorWorker` distributes images across GPUs for parallel processing
+- Auto-generates captions using the moondream model
+- Injects trigger words into captions (e.g., "ohwx", "txcl")
+- Parallel VAE encoding and T5/CLIP text encoding
+- Gathers preprocessed tensors from all GPUs
+
+**Trainer** ([`fal_demos/distributed/training/flux_lora/trainer/`](fal_demos/distributed/training/flux_lora/trainer/)):
+- `FluxLoRATrainingWorker` extends `DistributedWorker` for DDP training
+- Each GPU loads the Flux transformer and adds LoRA adapters
+- Models are wrapped with `torch.nn.parallel.DistributedDataParallel` for gradient synchronization
+- Implements proper Flux flow matching loss
+- Supports real-time progress streaming
+- Only rank 0 saves the final checkpoint
+
+The `FluxLoRATrainingApp` ([`fal_demos/distributed/training/flux_lora/trainer/app.py`](fal_demos/distributed/training/flux_lora/trainer/app.py)) provides multiple endpoints:
+- `/train-complete`: Full pipeline from raw images
+- `/train-from-preprocessed`: Training from preprocessed data
+- `/train-complete-stream`: Streaming progress updates
+
+**Complete Pipeline**:
+```
+Raw Images (ZIP) + trigger_word
+        ↓
+Multi-GPU Preprocessing (parallel VAE/T5/CLIP encoding)
+        ↓
+preprocessed_data.pt
+        ↓
+Multi-GPU Training (DDP with gradient sync)
+        ↓
+lora_checkpoint.safetensors
+```
+
+**When to use**: This pattern is essential for production training workloads that require:
+- Multi-GPU acceleration for faster training
+- Preprocessing large datasets in parallel
+- Synchronized gradient updates across GPUs
+- Streaming training metrics in real-time
+
+For detailed documentation on the training architecture, synchronization patterns, and troubleshooting, see [`fal_demos/distributed/training/flux_lora/README.md`](fal_demos/distributed/training/flux_lora/README.md).
+
+---
+
+These demos provide a solid foundation for understanding how to deploy a wide variety of models on fal. By going through them, you can learn how to structure your applications, manage dependencies, handle inputs and outputs effectively, and leverage the platform's features to build powerful and scalable AI services—from single-GPU inference to multi-GPU distributed training. Remember to consult the official [Fal documentation](docs.fal.ai) for more in-depth information on any of the concepts discussed.
