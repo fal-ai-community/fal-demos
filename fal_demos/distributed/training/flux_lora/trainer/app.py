@@ -157,6 +157,9 @@ class FluxLoRATrainingApp(fal.App):
     min_concurrency = 1
     max_concurrency = 1
     
+    # Configuration for torch.compile optimization
+    use_torch_compile: bool = False
+    
     requirements = [
         "torch==2.4.0",
         "diffusers==0.30.3",
@@ -197,11 +200,11 @@ class FluxLoRATrainingApp(fal.App):
             world_size=self.num_gpus,
         )
         
-        # Start training workers (warmup happens automatically in worker setup)
-        print(f"Starting {self.num_gpus} training workers...")
-        await self.runner.start(model_path=model_path)
+        # Start training workers (warmup happens automatically in worker setup if torch.compile is enabled)
+        print(f"Starting {self.num_gpus} training workers (torch.compile={'enabled' if self.use_torch_compile else 'disabled'})...")
+        await self.runner.start(model_path=model_path, use_torch_compile=self.use_torch_compile)
         
-        print("Training workers ready and compiled!")
+        print(f"Training workers ready{' and compiled' if self.use_torch_compile else ''}!")
     
     @fal.endpoint("/train")
     async def train(

@@ -28,13 +28,18 @@ class FluxLoRATrainingWorker(DistributedWorker):
     Production-ready distributed worker for Flux LoRA training.
     """
 
-    def setup(self, model_path: str = "/data/flux_weights", **kwargs: Any) -> None:
+    def setup(self, model_path: str = "/data/flux_weights", use_torch_compile: bool = True, **kwargs: Any) -> None:
         """
         Initialize the model on each GPU worker with proper LoRA configuration.
+        
+        Args:
+            model_path: Path to the Flux model weights
+            use_torch_compile: Whether to use torch.compile for 20-40% speedup (default: True)
         """
         from diffusers import FluxTransformer2DModel
         from peft import LoraConfig
 
+        self.use_torch_compile = use_torch_compile
         self.rank_print(f"Loading Flux model on {self.device}")
         
         # Load the transformer model
@@ -106,20 +111,22 @@ class FluxLoRATrainingWorker(DistributedWorker):
             find_unused_parameters=False,
         )
         
-        # Compile the transformer for faster training (20-40% speedup)
-        # mode="reduce-overhead" optimizes for reduced Python overhead in training loops
-        # dynamic=False assumes static shapes for more aggressive optimizations
-        self.rank_print("Compiling transformer with torch.compile...")
-        self.transformer = torch.compile(
-            self.transformer, 
-            mode="reduce-overhead", 
-            dynamic=False
-        )
-        
-        self.rank_print("Model loaded, wrapped with DDP, and compiled")
-        
-        # Run warmup to trigger compilation during setup
-        self.warmup()
+        # Optionally compile the transformer for faster training (20-40% speedup)
+        if self.use_torch_compile:
+            # mode="reduce-overhead" optimizes for reduced Python overhead in training loops
+            # dynamic=False assumes static shapes for more aggressive optimizations
+            self.rank_print("Compiling transformer with torch.compile...")
+            self.transformer = torch.compile(
+                self.transformer, 
+                mode="reduce-overhead", 
+                dynamic=False
+            )
+            self.rank_print("Model loaded, wrapped with DDP, and compiled")
+            
+            # Run warmup to trigger compilation during setup
+            self.warmup()
+        else:
+            self.rank_print("Model loaded and wrapped with DDP (torch.compile disabled)")
     
     def warmup(self) -> None:
         """
