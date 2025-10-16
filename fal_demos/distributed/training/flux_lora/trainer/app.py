@@ -153,7 +153,7 @@ class FluxLoRATrainingApp(fal.App):
     
     machine_type = "GPU-H100"
     num_gpus = 2
-    keep_alive = 3000
+    keep_alive = 6000
     min_concurrency = 1
     max_concurrency = 1
     
@@ -197,11 +197,11 @@ class FluxLoRATrainingApp(fal.App):
             world_size=self.num_gpus,
         )
         
-        # Start training workers
+        # Start training workers (warmup happens automatically in worker setup)
         print(f"Starting {self.num_gpus} training workers...")
         await self.runner.start(model_path=model_path)
         
-        print("Training workers ready!")
+        print("Training workers ready and compiled!")
     
     @fal.endpoint("/train")
     async def train(

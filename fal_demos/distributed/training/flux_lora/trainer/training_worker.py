@@ -106,7 +106,93 @@ class FluxLoRATrainingWorker(DistributedWorker):
             find_unused_parameters=False,
         )
         
-        self.rank_print("Model loaded and wrapped with DDP")
+        # Compile the transformer for faster training (20-40% speedup)
+        # mode="reduce-overhead" optimizes for reduced Python overhead in training loops
+        # dynamic=False assumes static shapes for more aggressive optimizations
+        self.rank_print("Compiling transformer with torch.compile...")
+        self.transformer = torch.compile(
+            self.transformer, 
+            mode="reduce-overhead", 
+            dynamic=False
+        )
+        
+        self.rank_print("Model loaded, wrapped with DDP, and compiled")
+        
+        # Run warmup to trigger compilation during setup
+        self.warmup()
+    
+    def warmup(self) -> None:
+        """
+        Warmup the compiled model to trigger torch.compile compilation.
+        This runs a dummy forward + backward pass so compilation happens
+        during setup rather than during the first training iteration.
+        """
+        self.rank_print("Running warmup to trigger torch.compile...")
+        
+        from diffusers import FluxPipeline
+        
+        # Create dummy inputs with realistic shapes
+        batch_size = 1
+        latent_height = 64  # 512px image / 8 (VAE scale)
+        latent_width = 64
+        latent_channels = 16
+        
+        # Dummy latents
+        dummy_latents = torch.randn(
+            batch_size, latent_channels, latent_height, latent_width,
+            device=self.device, dtype=torch.bfloat16
+        )
+        
+        # Dummy text embeddings
+        dummy_text_emb = torch.randn(
+            batch_size, 512, 4096,  # T5 embeddings
+            device=self.device, dtype=torch.bfloat16
+        )
+        
+        # Dummy pooled embeddings
+        dummy_pooled = torch.randn(
+            batch_size, 768,  # CLIP pooled
+            device=self.device, dtype=torch.bfloat16
+        )
+        
+        # Create text_ids (simple sequential position encoding for 512 text tokens)
+        # Shape: [batch_size, 512, 3] - matches preprocessor format
+        dummy_text_ids = torch.zeros(batch_size, 512, 3, dtype=torch.long, device=self.device)
+        dummy_text_ids[:, :, 1] = torch.arange(512, device=self.device)
+        
+        # Create img_ids (spatial position encoding for image latents)
+        # Shape: [batch_size, H*W/4, 3] - packed latent positions
+        dummy_img_ids = FluxPipeline._prepare_latent_image_ids(
+            batch_size=batch_size,
+            height=latent_height,
+            width=latent_width,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        
+        dummy_timesteps = torch.tensor([0.5], device=self.device, dtype=torch.bfloat16)
+        dummy_guidance = torch.tensor([1.0], device=self.device, dtype=torch.bfloat16)
+        
+        # Forward pass
+        loss = self.compute_flux_loss(
+            latents=dummy_latents,
+            text_embeddings=dummy_text_emb,
+            pooled_embeddings=dummy_pooled,
+            text_ids=dummy_text_ids,
+            img_ids=dummy_img_ids,
+            timesteps=dummy_timesteps,
+            guidance=dummy_guidance,
+            masks=None,
+            generator=None,
+        )
+        
+        # Backward pass to trigger full compilation
+        loss.backward()
+        
+        # Clear gradients
+        self.transformer.zero_grad()
+        
+        self.rank_print("Warmup complete - model is now compiled and ready for training")
 
     def compute_flux_loss(
         self,
@@ -310,10 +396,10 @@ class FluxLoRATrainingWorker(DistributedWorker):
         cpu_generator = torch.Generator(device='cpu').manual_seed(seed)
         
         # Step 7: Set up timestep sampling using sigmoid normal distribution
-        # Sample from normal(0.5, 0.25) then apply sigmoid
-        # This focuses sampling on middle timesteps for better training stability
+        # Sample from standard normal N(0, 1) then apply sigmoid
+        # This provides good coverage across all timesteps with emphasis on middle values
         def get_timesteps():
-            n = torch.normal(0.5, 0.25, (batch_size,), generator=cpu_generator)
+            n = torch.normal(mean=0.0, std=1.0, size=(batch_size,), generator=cpu_generator)
             return torch.sigmoid(n)
         
         # Step 8: Training loop
