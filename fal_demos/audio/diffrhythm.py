@@ -153,7 +153,6 @@ RUN apt-get update && \
     apt-get install -y git espeak-ng ffmpeg curl && \
     rm -rf /var/lib/apt/lists/*
 
-
 # Install Python dependencies
 RUN pip install accelerate==1.4.0 \
     inflect==7.5.0 \
@@ -180,7 +179,6 @@ RUN pip install accelerate==1.4.0 \
     onnxruntime==1.20.1 \
     Unidecode==1.3.8 \
     phonemizer==3.3.0 \
-    LangSegment==0.2.0 \
     liger_kernel==0.5.4 \
     openai==1.65.2 \
     pydantic==2.10.6 \
@@ -189,19 +187,19 @@ RUN pip install accelerate==1.4.0 \
     scipy==1.15.2 \
     ftfy==6.3.1 \
     torchdiffeq==0.2.5 \
-    ffmpeg-python
+    ffmpeg-python \
+    LangSegment==0.2.0 \
+    hydra-core==1.3.2
+
 """
 
 
-class DiffRhythm(
-    fal.App,
-    keep_alive=600,
-    min_concurrency=1,
-    max_concurrency=4,
-    name="diffrhythm",
-    kind="container", # Specify the kind of app as container
-    image=fal.ContainerImage.from_dockerfile_str(DOCKER_STRING), # Use the custom Docker image
-):
+class DiffRhythm(fal.App):
+    keep_alive = 600
+    min_concurrency = 1
+    max_concurrency = 2
+    app_name = "diffrhythm"
+    image = fal.ContainerImage.from_dockerfile_str(DOCKER_STRING)  # Use the custom Docker image
     machine_type = "GPU-H100"
 
     def setup(self):
@@ -211,7 +209,7 @@ class DiffRhythm(
         # Clone the DiffRhythm repository
         repo_path = clone_repository(
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm",
-            commit_hash="0d355fb2211e3f4f04112d8ed30cc9211a79c974",
+            commit_hash="f0f1b621ff31d0da9539c0495e034051af9c4179",
             include_to_path=True,
             target_dir="/app",
             repo_name="diffrythm",
@@ -223,20 +221,31 @@ class DiffRhythm(
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/src/negative_prompt.npy",
             target_dir=f"{repo_path}/src",
         )
-        self.negative_style_prompt = (
-            torch.from_numpy(np.load("./src/negative_prompt.npy")).to("cuda").half()
-        )
 
         download_file(
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/diffrhythm/g2p/sources/g2p_chinese_model/poly_bert_model.onnx",
             target_dir=f"{repo_path}/diffrhythm/g2p/sources/g2p_chinese_model",
         )
+        
+        # Download eval model files required by prepare_model
+        download_file(
+            "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/pretrained/eval.yaml",
+            target_dir=f"{repo_path}/pretrained",
+        )
+        download_file(
+            "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/pretrained/eval.safetensors",
+            target_dir=f"{repo_path}/pretrained",
+        )
+        
         from diffrhythm.infer.infer_utils import prepare_model
 
         device = "cuda"
-        self.cfm, self.cfm_full, self.tokenizer, self.muq, self.vae = prepare_model(
-            device
+        # Load model with max_frames=6144 (supports both 95s and 285s durations)
+        self.cfm, self.tokenizer, self.muq, self.vae, self.eval_model, self.eval_muq = prepare_model(
+            max_frames=6144, device=device
         )
+        # Compile the model for better performance
+        self.cfm = torch.compile(self.cfm)
         self.warmup()
 
     def warmup(self):
@@ -279,17 +288,18 @@ class DiffRhythm(
         with tempfile.TemporaryDirectory() as output_dir:
             output_path = os.path.join(output_dir, "output.wav")
 
+            # Set max_frames based on duration (model supports both)
             if input.music_duration == "95s":
                 max_frames = 2048
-                cfm_model = self.cfm
             else:
                 max_frames = 6144
-                cfm_model = self.cfm_full
+            cfm_model = self.cfm
 
             sway_sampling_coef = -1 if input.num_inference_steps < 32 else None
+            max_secs = 95 if input.music_duration == "95s" else 285
             try:
-                lrc_prompt, start_time = get_lrc_token(
-                    max_frames, input.lyrics, self.tokenizer, "cuda"
+                lrc_prompt, start_time, end_frame, song_duration = get_lrc_token(
+                    max_frames, input.lyrics, self.tokenizer, max_secs, "cuda"
                 )
             except Exception as e:
                 print("Error in lrc prompt", e)
@@ -297,6 +307,7 @@ class DiffRhythm(
                     raise FieldException("lyrics", "Unsupported language in lyrics.")
 
             vocal_flag = False
+            ref_audio_path = None
             if input.reference_audio_url:
                 try:
                     ref_audio_path = download_file(
@@ -317,27 +328,43 @@ class DiffRhythm(
                     raise FieldException(
                         "style_prompt", "The style prompt could not be processed."
                     )
+            
+            # Import and call get_negative_style_prompt
+            from diffrhythm.infer.infer_utils import get_negative_style_prompt
+            negative_style_prompt = get_negative_style_prompt("cuda")
 
-            latent_prompt = get_reference_latent("cuda", max_frames)
+            latent_prompt, pred_frames = get_reference_latent(
+                "cuda", max_frames, edit=False, pred_segments=None, ref_song=ref_audio_path, vae_model=self.vae
+            )
+            batch_infer_num = 3  # Number of songs to generate for selection
+            # inference returns (sample_rate, audio_array) when file_type='wav'
             sample_rate, generated_song = inference(
                 cfm_model=cfm_model,
                 vae_model=self.vae,
+                eval_model=self.eval_model,
+                eval_muq=self.eval_muq,
                 cond=latent_prompt,
                 text=lrc_prompt,
-                duration=max_frames,
+                duration=end_frame,
                 style_prompt=style_prompt,
-                negative_style_prompt=self.negative_style_prompt,
+                negative_style_prompt=negative_style_prompt,
                 steps=input.num_inference_steps,
+                cfg_strength=input.cfg_strength,
                 sway_sampling_coef=sway_sampling_coef,
                 start_time=start_time,
                 file_type="wav",
-                cfg_strength=input.cfg_strength,
                 vocal_flag=vocal_flag,
                 odeint_method=input.scheduler,
+                pred_frames=pred_frames,
+                batch_infer_num=batch_infer_num,
+                song_duration=song_duration,
             )
+            # generated_song is numpy array with shape [num_samples, num_channels]
+            # torchaudio.save expects [num_channels, num_samples], so we transpose
+            audio_tensor = torch.from_numpy(generated_song).T
             torchaudio.save(
                 output_path,
-                torch.from_numpy(generated_song).transpose(0, 1),
+                audio_tensor,
                 sample_rate=sample_rate,
             )
             response.headers["x-fal-billable-units"] = str(
