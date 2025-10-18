@@ -70,7 +70,7 @@ class FluxPreprocessorApp(fal.App):
     
     machine_type = "GPU-H100"
     num_gpus = 2
-    keep_alive = 300
+    keep_alive = 12000
     min_concurrency = 0
     max_concurrency = 2
     

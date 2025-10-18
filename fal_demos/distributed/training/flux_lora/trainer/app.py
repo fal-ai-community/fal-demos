@@ -154,11 +154,11 @@ class FluxLoRATrainingApp(fal.App):
     machine_type = "GPU-H100"
     num_gpus = 2
     keep_alive = 6000
-    min_concurrency = 1
+    min_concurrency = 0
     max_concurrency = 1
     
     # Configuration for torch.compile optimization
-    use_torch_compile: bool = False
+    use_torch_compile: bool = True
     
     requirements = [
         "torch==2.4.0",

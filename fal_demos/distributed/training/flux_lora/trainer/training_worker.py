@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -103,26 +104,28 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 elif "lora_B" in name:
                     nn.init.zeros_(param)
         
-        # Wrap with DDP for synchronized training
-        self.transformer = DDP(
-            self.transformer,
-            device_ids=[self.rank],
-            output_device=self.rank,
-            find_unused_parameters=False,
-        )
-        
-        # Optionally compile the transformer for faster training (20-40% speedup)
+        # Optionally compile BEFORE wrapping with DDP (CRITICAL ORDER!)
         if self.use_torch_compile:
             # mode="reduce-overhead" optimizes for reduced Python overhead in training loops
-            # dynamic=False assumes static shapes for more aggressive optimizations
+            # dynamic=False with numpy random sampling avoids recompilation issues
             self.rank_print("Compiling transformer with torch.compile...")
             self.transformer = torch.compile(
                 self.transformer, 
                 mode="reduce-overhead", 
                 dynamic=False
             )
-            self.rank_print("Model loaded, wrapped with DDP, and compiled")
-            
+            self.rank_print("Model compiled successfully")
+
+        # Then wrap the compiled model with DDP
+        self.transformer = DDP(
+            self.transformer,
+            device_ids=[self.rank],
+            output_device=self.rank,
+            find_unused_parameters=False,
+        )
+
+        if self.use_torch_compile:
+            self.rank_print("Model compiled and wrapped with DDP")
             # Run warmup to trigger compilation during setup
             self.warmup()
         else:
@@ -130,76 +133,173 @@ class FluxLoRATrainingWorker(DistributedWorker):
     
     def warmup(self) -> None:
         """
-        Warmup the compiled model to trigger torch.compile compilation.
-        This runs a dummy forward + backward pass so compilation happens
-        during setup rather than during the first training iteration.
+        Warmup the compiled model using real preprocessed training data.
+        This runs a forward + backward pass with actual data to trigger torch.compile
+        compilation during setup rather than during the first training iteration.
+
+        CRITICAL: Uses real preprocessed data to guarantee 100% identical tensor
+        characteristics as training. This ensures torch.compile with dynamic=False
+        doesn't recompile on first training step.
+        
+        NOTE: With the numpy random sampling fix in prepare_training_batch, the exact
+        number of samples no longer matters (4 warmup vs 7+ training is OK).
         """
         self.rank_print("Running warmup to trigger torch.compile...")
-        
+
+        # Load real preprocessed data for warmup (subset only)
+        warmup_data_path = "/data/turbo_flux_trainer_warmup_data.pt"
+
+        if self.rank == 0:
+            self.rank_print(f"Loading warmup data from {warmup_data_path}")
+            warmup_data = torch.load(warmup_data_path, map_location="cpu", weights_only=False)
+
+            # Use subset of real data for warmup (first 4 samples)
+            warmup_latents = warmup_data["latents"][:4]  # [4, 16, 64, 64]
+            warmup_text_emb = warmup_data["text_embeddings"][:4]  # [4, 512, 4096]
+            warmup_pooled = warmup_data["pooled_embeddings"][:4]  # [4, 768]
+            warmup_text_ids = warmup_data["text_ids"]  # [1, 512, 3]
+            warmup_masks = warmup_data.get("masks", None)
+            if warmup_masks is not None:
+                warmup_masks = warmup_masks[:4]  # [4, 1, 64, 64]
+
+            self.rank_print(f"Warmup data shapes: latents={warmup_latents.shape}, text_emb={warmup_text_emb.shape}, pooled={warmup_pooled.shape}")
+        else:
+            # Other ranks get empty tensors (will be filled by broadcast)
+            warmup_latents = torch.empty(0)
+            warmup_text_emb = torch.empty(0)
+            warmup_pooled = torch.empty(0)
+            warmup_text_ids = torch.empty(0, dtype=torch.long)
+            warmup_masks = torch.empty(0)
+
+        # Broadcast warmup data to all ranks
+        torch.cuda.set_device(self.device)
+        objects = [warmup_latents, warmup_text_emb, warmup_pooled, warmup_text_ids, warmup_masks]
+        dist.broadcast_object_list(objects, src=0)
+        warmup_latents, warmup_text_emb, warmup_pooled, warmup_text_ids, warmup_masks = objects
+
+        # Move to GPU and ensure correct dtypes (same as training)
+        warmup_latents = warmup_latents.to(self.device, dtype=torch.bfloat16)
+        warmup_text_emb = warmup_text_emb.to(self.device, dtype=torch.bfloat16)
+        warmup_pooled = warmup_pooled.to(self.device, dtype=torch.bfloat16)
+        warmup_text_ids = warmup_text_ids.to(self.device, dtype=torch.long)
+        if warmup_masks is not None and warmup_masks.numel() > 0:
+            warmup_masks = warmup_masks.to(self.device, dtype=torch.bfloat16)
+        else:
+            warmup_masks = None
+
+        # Create img_ids dynamically (same as training code)
         from diffusers import FluxPipeline
-        
-        # Create dummy inputs with realistic shapes
-        batch_size = 1
-        latent_height = 64  # 512px image / 8 (VAE scale)
-        latent_width = 64
-        latent_channels = 16
-        
-        # Dummy latents
-        dummy_latents = torch.randn(
-            batch_size, latent_channels, latent_height, latent_width,
-            device=self.device, dtype=torch.bfloat16
-        )
-        
-        # Dummy text embeddings
-        dummy_text_emb = torch.randn(
-            batch_size, 512, 4096,  # T5 embeddings
-            device=self.device, dtype=torch.bfloat16
-        )
-        
-        # Dummy pooled embeddings
-        dummy_pooled = torch.randn(
-            batch_size, 768,  # CLIP pooled
-            device=self.device, dtype=torch.bfloat16
-        )
-        
-        # Create text_ids (simple sequential position encoding for 512 text tokens)
-        # Shape: [batch_size, 512, 3] - matches preprocessor format
-        dummy_text_ids = torch.zeros(batch_size, 512, 3, dtype=torch.long, device=self.device)
-        dummy_text_ids[:, :, 1] = torch.arange(512, device=self.device)
-        
-        # Create img_ids (spatial position encoding for image latents)
-        # Shape: [batch_size, H*W/4, 3] - packed latent positions
-        dummy_img_ids = FluxPipeline._prepare_latent_image_ids(
-            batch_size=batch_size,
+        latent_height = warmup_latents.shape[2]
+        latent_width = warmup_latents.shape[3]
+        img_ids_template = FluxPipeline._prepare_latent_image_ids(
+            batch_size=1,
             height=latent_height,
             width=latent_width,
             device=self.device,
             dtype=torch.bfloat16,
         )
-        
-        dummy_timesteps = torch.tensor([0.5], device=self.device, dtype=torch.bfloat16)
-        dummy_guidance = torch.tensor([1.0], device=self.device, dtype=torch.bfloat16)
-        
-        # Forward pass
-        loss = self.compute_flux_loss(
-            latents=dummy_latents,
-            text_embeddings=dummy_text_emb,
-            pooled_embeddings=dummy_pooled,
-            text_ids=dummy_text_ids,
-            img_ids=dummy_img_ids,
-            timesteps=dummy_timesteps,
-            guidance=dummy_guidance,
-            masks=None,
-            generator=None,
+        warmup_img_ids = img_ids_template.squeeze(0)  # Remove batch dim: [H*W/4, 3]
+
+        # Create generators (same as training)
+        gpu_generator = torch.Generator(device=self.device).manual_seed(42)
+        cpu_generator = torch.Generator(device='cpu').manual_seed(42)
+
+        # Use ACTUAL training batch preparation with real data - guaranteed identical path!
+        batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, batch_img_ids, timesteps, guidance, batch_masks = self.prepare_training_batch(
+            latents=warmup_latents,
+            text_embeddings=warmup_text_emb,
+            pooled_embeddings=warmup_pooled,
+            text_ids=warmup_text_ids,
+            img_ids=warmup_img_ids,
+            masks=warmup_masks,
+            batch_size=4,
+            guidance_scale=1.0,
+            cpu_generator=cpu_generator,
         )
-        
+
+        # Use ACTUAL loss computation with real data (same as training)
+        loss = self.compute_flux_loss(
+            latents=batch_latents,
+            text_embeddings=batch_text_emb,
+            pooled_embeddings=batch_pooled_emb,
+            text_ids=batch_text_ids,
+            img_ids=batch_img_ids,
+            timesteps=timesteps,
+            guidance=guidance,
+            masks=batch_masks,
+            generator=gpu_generator,
+        )
+
         # Backward pass to trigger full compilation
         loss.backward()
-        
+
         # Clear gradients
         self.transformer.zero_grad()
+
+        self.rank_print("Warmup complete - model compiled with real data and ready for training")
+
+    def prepare_training_batch(
+        self,
+        latents: torch.Tensor,
+        text_embeddings: torch.Tensor,
+        pooled_embeddings: torch.Tensor,
+        text_ids: torch.Tensor,
+        img_ids: torch.Tensor,
+        masks: torch.Tensor | None,
+        batch_size: int,
+        guidance_scale: float,
+        cpu_generator: torch.Generator,
+    ) -> tuple:
+        """
+        Prepare a single training batch with all preprocessing.
         
-        self.rank_print("Warmup complete - model is now compiled and ready for training")
+        Used by BOTH warmup and training to guarantee identical execution path.
+        This is critical for torch.compile with dynamic=False.
+        
+        IMPORTANT: Uses numpy for random sampling instead of torch.randperm to avoid
+        graph dependencies on dataset size (num_samples), which would cause recompilation
+        when warmup uses different num_samples than training.
+        
+        Returns:
+            Tuple of (batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, 
+                     batch_img_ids, timesteps, guidance, batch_masks)
+        """
+        num_samples = latents.shape[0]
+        
+        # CRITICAL FIX: Use numpy random instead of torch.randperm to avoid graph dependency
+        # torch.randperm(num_samples) creates a symbolic shape dependency on num_samples,
+        # causing recompilation when warmup (4 samples) differs from training (variable samples)
+        rng = np.random.default_rng(seed=int(cpu_generator.initial_seed()) + int(torch.randint(0, 2**31, (1,)).item()))
+        
+        # Sample indices without replacement if possible, with replacement if needed
+        if num_samples >= batch_size:
+            indices = rng.choice(num_samples, size=batch_size, replace=False)
+        else:
+            indices = rng.choice(num_samples, size=batch_size, replace=True)
+        
+        # Convert to tensor on the correct device
+        indices = torch.from_numpy(indices).to(latents.device)
+        
+        # Get batch
+        batch_latents = latents[indices]
+        batch_text_emb = text_embeddings[indices]
+        batch_pooled_emb = pooled_embeddings[indices]
+        batch_masks = masks[indices] if masks is not None else None
+        
+        # Sample timesteps using sigmoid normal distribution
+        n = torch.normal(mean=0.0, std=1.0, size=(batch_size,), generator=cpu_generator)
+        timesteps = torch.sigmoid(n).to(self.device, dtype=torch.bfloat16)
+        
+        # Guidance
+        guidance = torch.full((batch_size,), guidance_scale, device=self.device, dtype=torch.bfloat16)
+        
+        # Expand text_ids to batch size: [1, 512, 3] -> [batch_size, 512, 3]
+        batch_text_ids = text_ids.expand(batch_size, -1, -1)
+        
+        # Expand img_ids to batch size: [H*W, 3] -> [batch_size, H*W, 3]
+        batch_img_ids = img_ids.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        return batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, batch_img_ids, timesteps, guidance, batch_masks
 
     def compute_flux_loss(
         self,
@@ -211,7 +311,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         timesteps: torch.Tensor,
         guidance: torch.Tensor,
         masks: torch.Tensor | None = None,
-        generator: torch.Generator | None = None,
+        generator: torch.Generator = None,
     ) -> torch.Tensor:
         """
         Compute proper Flux flow matching loss.
@@ -221,18 +321,17 @@ class FluxLoRATrainingWorker(DistributedWorker):
         - Interpolate between latents and noise using timestep
         - Predict velocity from latents to noise
         - Compute MSE loss with optional masking
+        
+        Args:
+            generator: GPU generator for reproducible noise. Required for deterministic training.
         """
         from diffusers import FluxPipeline
         
         batch_size = latents.shape[0]
         
-        # Generate noise using generator for reproducibility
-        if generator is not None and generator.device.type == "cpu":
-            noise = torch.randn(latents.shape, generator=generator, dtype=latents.dtype).to(latents.device)
-        elif generator is not None:
-            noise = torch.randn(latents.shape, generator=generator, dtype=latents.dtype, device=latents.device)
-        else:
-            noise = torch.randn_like(latents)
+        # Generate noise using GPU generator for reproducibility
+        # No branching = optimal torch.compile performance with dynamic=False
+        noise = torch.randn(latents.shape, generator=generator, dtype=latents.dtype, device=latents.device)
         
         # Flow matching: interpolate between latents and noise
         # weight controls the interpolation (0 = latents, 1 = noise)
@@ -291,7 +390,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         learning_rate: float = 4e-4,
         b_up_factor: float = 2.0,
         max_train_steps: int = 100,
-        batch_size: int = 1,
+        batch_size: int = 4,
         gradient_accumulation_steps: int = 1,
         guidance_scale: float = 1.0,
         use_masks: bool = True,
@@ -302,6 +401,9 @@ class FluxLoRATrainingWorker(DistributedWorker):
     ) -> dict[str, Any]:
         """
         Production-ready training function with proper Flux training logic.
+        
+        The numpy random sampling fix in prepare_training_batch prevents recompilation
+        even when dataset size varies between warmup and training.
         """
         self.rank_print(f"Starting training: lr={learning_rate}, steps={max_train_steps}")
         
@@ -312,7 +414,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         # Step 1: Load training data (only rank 0)
         if self.rank == 0:
             self.rank_print(f"Loading training data from {training_data_path}")
-            data = torch.load(training_data_path, map_location="cpu")
+            data = torch.load(training_data_path, map_location="cpu", weights_only=False)
             latents = data["latents"]
             text_embeddings = data["text_embeddings"]
             pooled_embeddings = data["pooled_embeddings"]
@@ -402,47 +504,23 @@ class FluxLoRATrainingWorker(DistributedWorker):
         gpu_generator = torch.Generator(device=self.device).manual_seed(seed + self.rank)
         cpu_generator = torch.Generator(device='cpu').manual_seed(seed)
         
-        # Step 7: Set up timestep sampling using sigmoid normal distribution
-        # Sample from standard normal N(0, 1) then apply sigmoid
-        # This provides good coverage across all timesteps with emphasis on middle values
-        def get_timesteps():
-            n = torch.normal(mean=0.0, std=1.0, size=(batch_size,), generator=cpu_generator)
-            return torch.sigmoid(n)
-        
-        # Step 8: Training loop
+        # Step 7: Training loop
         self.transformer.train()
         total_loss = 0.0
         
         for step in range(max_train_steps):
-            # Sample batch (each GPU gets different indices)
-            batch_indices = torch.randperm(num_samples, device="cpu")[:batch_size * self.world_size]
-            local_indices = batch_indices[self.rank * batch_size:(self.rank + 1) * batch_size]
-            
-            if len(local_indices) < batch_size:
-                # Pad if needed
-                local_indices = torch.cat([
-                    local_indices,
-                    torch.randint(0, num_samples, (batch_size - len(local_indices),))
-                ])
-            
-            # Get batch
-            batch_latents = latents[local_indices]
-            batch_text_emb = text_embeddings[local_indices]
-            batch_pooled_emb = pooled_embeddings[local_indices]
-            batch_masks = masks[local_indices] if masks is not None else None
-            
-            # Sample timesteps (already in [0, 1] range from get_timesteps)
-            timesteps = get_timesteps()
-            timesteps = timesteps.to(self.device, dtype=torch.bfloat16)
-            
-            # Guidance
-            guidance = torch.full((batch_size,), guidance_scale, device=self.device, dtype=torch.bfloat16)
-            
-            # Expand text_ids to batch size: [1, 512, 3] -> [batch_size, 512, 3]
-            batch_text_ids = text_ids.expand(batch_size, -1, -1)
-            
-            # Expand img_ids to batch size: [H*W, 3] -> [batch_size, H*W, 3]
-            batch_img_ids = img_ids.unsqueeze(0).expand(batch_size, -1, -1)
+            # Prepare batch using shared function (same as warmup!)
+            batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, batch_img_ids, timesteps, guidance, batch_masks = self.prepare_training_batch(
+                latents=latents,
+                text_embeddings=text_embeddings,
+                pooled_embeddings=pooled_embeddings,
+                text_ids=text_ids,
+                img_ids=img_ids,
+                masks=masks,
+                batch_size=batch_size,
+                guidance_scale=guidance_scale,
+                cpu_generator=cpu_generator,
+            )
             
             # Compute loss
             loss = self.compute_flux_loss(

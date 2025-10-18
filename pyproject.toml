@@ -29,5 +29,5 @@ parallel-sdxl = { auth = "shared", ref = "fal_demos/distributed/inference/parall
 xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py::XFuserApp", no_scale=true }
 
 # Distributed training examples
-flux-preprocessor = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp", no_scale=true }
+flux-preprocessor = { auth = "private", ref = "fal_demos/distributed/training/flux_lora/preprocessor/app.py::FluxPreprocessorApp", no_scale=true }
 flux-training = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp", no_scale=true }
