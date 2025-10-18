@@ -150,8 +150,9 @@ FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
 
 # Install system dependencies
 RUN apt-get update && \
-    apt-get install -y git espeak-ng ffmpeg && \
+    apt-get install -y git espeak-ng ffmpeg curl && \
     rm -rf /var/lib/apt/lists/*
+
 
 # Install Python dependencies
 RUN pip install accelerate==1.4.0 \
