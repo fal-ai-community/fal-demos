@@ -1,13 +1,13 @@
 """
-Flux LoRA Training Worker - Production-Ready Implementation
+Flux LoRA Training Worker - Production Implementation
 
-This worker implements REAL Flux LoRA training with:
-- Proper flow matching loss
+This worker implements Flux LoRA training with:
+- Flow matching loss for rectified flow models
 - Sigmoid normal timestep sampling
-- Correct image/text IDs
-- Dual learning rates for lora_A and lora_B
-- Learning rate scheduling
-- torch.compile optimization with warmup
+- Proper image and text position IDs
+- Dual learning rates for LoRA matrices (lora_A and lora_B)
+- Flexible learning rate scheduling
+- Optional torch.compile optimization for 20-40% speedup
 """
 
 import tempfile
@@ -25,18 +25,17 @@ from fal.distributed import DistributedWorker
 
 class FluxLoRATrainingWorker(DistributedWorker):
     """
-    Production-ready distributed worker for Flux LoRA training.
+    Distributed worker for Flux LoRA training.
     
-    CRITICAL CONSTRAINTS for torch.compile with dynamic=False:
-    - BATCH_SIZE: Fixed at 4 (matches warmup)
-    - LATENT_DIMS: Fixed at [16, 64, 64] (matches 512x512 images)
-    - GUIDANCE_SCALE: Fixed at 1.0 (matches warmup)
+    When torch.compile is enabled (default), these parameters are fixed to avoid recompilation:
+    - BATCH_SIZE: 4
+    - LATENT_DIMS: [16, 64, 64] (512x512 images)
+    - GUIDANCE_SCALE: 1.0
     
-    These are hardcoded to prevent recompilation. Any deviation will cause
-    torch.compile to recompile the entire model during training.
+    For different effective batch sizes, use gradient_accumulation_steps.
     """
     
-    # Fixed compilation constants - DO NOT CHANGE without retraining warmup
+    # Fixed constants for torch.compile optimization
     BATCH_SIZE = 4
     LATENT_CHANNELS = 16
     LATENT_HEIGHT = 64
@@ -65,11 +64,10 @@ class FluxLoRATrainingWorker(DistributedWorker):
             torch_dtype=torch.bfloat16,
         ).to(self.device)
         
-        # Configure LoRA targeting all blocks (both double and single stream)
-        
+        # Configure LoRA targeting all transformer blocks
         target_modules = []
         
-        # Double stream blocks (19 blocks) - these handle text-image interaction
+        # Double stream blocks (19 blocks) - handle text-image interaction
         for block_num in range(19):
             target_modules.extend([
                 f"transformer_blocks.{block_num}.attn.to_q",
@@ -86,7 +84,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 f"transformer_blocks.{block_num}.ff_context.net.2",
             ])
         
-        # Single stream blocks (38 blocks) - CRITICAL for image generation
+        # Single stream blocks (38 blocks) - main image generation pathway
         for block_num in range(38):
             target_modules.extend([
                 f"single_transformer_blocks.{block_num}.attn.to_q",
@@ -97,7 +95,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             ])
         
         lora_config = LoraConfig(
-            r=16,  # rank
+            r=16,
             lora_alpha=16,
             target_modules=target_modules,
             lora_dropout=0.0,
@@ -105,24 +103,22 @@ class FluxLoRATrainingWorker(DistributedWorker):
             init_lora_weights="gaussian",
         )
         
-        # Add LoRA adapters
+        # Add LoRA adapters to the model
         self.transformer.add_adapter(lora_config)
         
-        # Freeze base model, only train LoRA
+        # Freeze base model parameters, enable LoRA parameters
         self.transformer.requires_grad_(False)
         for name, param in self.transformer.named_parameters():
             if "lora" in name:
                 param.requires_grad = True
-                # Initialize LoRA parameters properly
+                # Initialize LoRA parameters
                 if "lora_A" in name:
                     nn.init.normal_(param, mean=0.0, std=1.0 / 16)
                 elif "lora_B" in name:
                     nn.init.zeros_(param)
         
-        # Optionally compile BEFORE wrapping with DDP (CRITICAL ORDER!)
+        # Apply torch.compile optimization if enabled (must happen before DDP wrapping)
         if self.use_torch_compile:
-            # mode="reduce-overhead" optimizes for reduced Python overhead in training loops
-            # dynamic=False with numpy random sampling avoids recompilation issues
             self.rank_print("Compiling transformer with torch.compile...")
             self.transformer = torch.compile(
                 self.transformer, 
@@ -131,7 +127,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             )
             self.rank_print("Model compiled successfully")
 
-        # Then wrap the compiled model with DDP
+        # Wrap with DistributedDataParallel for multi-GPU training
         self.transformer = DDP(
             self.transformer,
             device_ids=[self.rank],
@@ -141,29 +137,25 @@ class FluxLoRATrainingWorker(DistributedWorker):
 
         if self.use_torch_compile:
             self.rank_print("Model compiled and wrapped with DDP")
-            # Run warmup to trigger compilation during setup
             self.warmup()
         else:
-            self.rank_print("Model loaded and wrapped with DDP (torch.compile disabled)")
+            self.rank_print("Model loaded and wrapped with DDP")
     
     def warmup(self) -> None:
         """
-        Warmup the compiled model using real preprocessed training data.
+        Warmup the compiled model to trigger torch.compile graph generation.
         
-        Creates DUMMY optimizer and scheduler to ensure 100% identical control flow
-        with training. This is critical - even though we don't update weights during
-        warmup, we need to call optimizer.step() and scheduler.step() to match the
-        exact execution path of training for torch.compile with dynamic=False.
+        Runs a single training step with a lightweight optimizer to compile the model
+        graph before actual training begins. This prevents compilation overhead during
+        the training phase.
         """
         self.rank_print("Running warmup to trigger torch.compile...")
         
         warmup_data_path = "/data/turbo_flux_trainer_warmup_data.pt"
         
-        # Create DUMMY optimizer and scheduler for warmup
-        # This ensures identical control flow as training (no conditional branches)
         model = self.transformer.module
         
-        # Collect trainable parameters (same as training)
+        # Collect trainable LoRA parameters
         params_A = []
         params_B = []
         for name, param in model.named_parameters():
@@ -173,56 +165,50 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 elif "lora_B" in name:
                     params_B.append(param)
         
-        # Create dummy optimizer (same config as training)
-        dummy_optimizer = torch.optim.AdamW([
+        # Create temporary optimizer for warmup
+        warmup_optimizer = torch.optim.AdamW([
             {"params": params_A, "lr": 4e-4, "weight_decay": 0.1},
             {"params": params_B, "lr": 4e-4 * 2.0, "weight_decay": 0.1},
         ], betas=(0.9, 0.999), eps=1e-8)
         
-        # Create dummy scheduler (same as training)
         from diffusers.optimization import get_scheduler as get_diffusers_scheduler
-        dummy_scheduler = get_diffusers_scheduler(
+        warmup_scheduler = get_diffusers_scheduler(
             "constant",
-            optimizer=dummy_optimizer,
+            optimizer=warmup_optimizer,
             num_warmup_steps=0,
             num_training_steps=1,
         )
         
-        # Call the training loop with dummy optimizer/scheduler
-        # This ensures IDENTICAL execution path as real training
+        # Run a single training step to compile the model
         self._run_training_loop(
             training_data_path=warmup_data_path,
             max_train_steps=1,
             seed=42,
-            optimizer=dummy_optimizer,  # Dummy optimizer (won't actually update weights much in 1 step)
-            lr_scheduler_obj=dummy_scheduler,  # Dummy scheduler
+            optimizer=warmup_optimizer,
+            lr_scheduler_obj=warmup_scheduler,
             gradient_accumulation_steps=1,
             streaming=False,
-            save_checkpoint=False,  # Don't save checkpoint during warmup
+            save_checkpoint=False,
         )
         
-        # Zero out any changes from the dummy optimizer step
-        # This ensures we start training from the exact same initial state
+        # Reset gradients to start training from clean state
         model.zero_grad()
         for param in model.parameters():
             if param.requires_grad and param.grad is not None:
                 param.grad = None
         
-        self.rank_print("Warmup complete - model compiled with real data and ready for training")
+        self.rank_print("Warmup complete - model compiled and ready for training")
 
     def create_img_ids(self, latent_height: int, latent_width: int) -> torch.Tensor:
         """
         Create image position IDs for Flux transformer.
         
-        This is extracted as a separate method to ensure warmup and training use
-        IDENTICAL code paths.
-        
         Args:
-            latent_height: Height of latent tensors (should match LATENT_HEIGHT)
-            latent_width: Width of latent tensors (should match LATENT_WIDTH)
+            latent_height: Height of latent tensors
+            latent_width: Width of latent tensors
             
         Returns:
-            Image IDs tensor of shape [H*W/4, 3]
+            Image position IDs tensor of shape [H*W/4, 3]
         """
         from diffusers import FluxPipeline
         
@@ -233,7 +219,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             device=self.device,
             dtype=torch.bfloat16,
         )
-        return img_ids_template.squeeze(0)  # Remove batch dim: [H*W/4, 3]
+        return img_ids_template.squeeze(0)
 
     def run_training_step(
         self,
@@ -248,10 +234,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         gradient_accumulation_steps: int = 1,
     ) -> torch.Tensor:
         """
-        Execute one complete training step: batch prep -> forward -> loss -> backward.
-        
-        This method is shared by BOTH warmup and training to guarantee 100% identical
-        execution paths. This is absolutely critical for torch.compile with dynamic=False.
+        Execute one training step: batch preparation, forward pass, loss computation, and backward pass.
         
         Args:
             latents: Training latents [N, 16, 64, 64]
@@ -259,13 +242,13 @@ class FluxLoRATrainingWorker(DistributedWorker):
             pooled_embeddings: Pooled embeddings [N, 768]
             text_ids: Text position IDs [1, 512, 3]
             img_ids: Image position IDs [H*W/4, 3]
-            gpu_generator: Generator for noise sampling
-            cpu_generator: Generator for timestep sampling
-            step: Current training step
-            gradient_accumulation_steps: Number of steps to accumulate gradients
+            gpu_generator: Random generator for noise sampling
+            cpu_generator: Random generator for timestep sampling
+            step: Current training step number
+            gradient_accumulation_steps: Gradient accumulation steps
             
         Returns:
-            Loss value (already scaled by gradient_accumulation_steps)
+            Loss value scaled by gradient_accumulation_steps
         """
         # Prepare batch
         batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, batch_img_ids, timesteps, guidance = self.prepare_training_batch(
@@ -313,17 +296,13 @@ class FluxLoRATrainingWorker(DistributedWorker):
         step: int = 0,
     ) -> tuple:
         """
-        Prepare a single training batch with all preprocessing.
+        Prepare a training batch with random sampling and timestep generation.
         
-        Used by BOTH warmup and training to guarantee identical execution path.
-        This is critical for torch.compile with dynamic=False.
-        
-        IMPORTANT: Uses numpy for random sampling instead of torch.randperm to avoid
-        graph dependencies on dataset size (num_samples), which would cause recompilation
-        when warmup uses different num_samples than training.
+        Uses numpy for random sampling to avoid torch.compile recompilation issues
+        that would occur with dynamic tensor shapes in the computation graph.
         
         Args:
-            step: Step counter for deterministic seed variation (avoids torch.randint in compiled region)
+            step: Step counter for deterministic seed variation
         
         Returns:
             Tuple of (batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, 
@@ -331,18 +310,13 @@ class FluxLoRATrainingWorker(DistributedWorker):
         """
         num_samples = latents.shape[0]
         
-        # Use step counter for deterministic seed variation instead of torch.randint
-        # This avoids creating torch operations in the compiled region
+        # Use numpy RNG with step-based seeding for deterministic sampling
         base_seed = int(cpu_generator.initial_seed())
         rng = np.random.default_rng(seed=base_seed + step)
         
-        # Sample indices without replacement if possible, with replacement if needed
-        if num_samples >= batch_size:
-            indices = rng.choice(num_samples, size=batch_size, replace=False)
-        else:
-            indices = rng.choice(num_samples, size=batch_size, replace=True)
-        
-        # Convert to tensor on the correct device
+        # Sample batch indices
+        replace = num_samples < batch_size
+        indices = rng.choice(num_samples, size=batch_size, replace=replace)
         indices = torch.from_numpy(indices).to(latents.device)
         
         # Get batch
@@ -350,17 +324,15 @@ class FluxLoRATrainingWorker(DistributedWorker):
         batch_text_emb = text_embeddings[indices]
         batch_pooled_emb = pooled_embeddings[indices]
         
-        # Sample timesteps using sigmoid normal distribution
+        # Sample timesteps using sigmoid-transformed normal distribution
         n = torch.normal(mean=0.0, std=1.0, size=(batch_size,), generator=cpu_generator)
         timesteps = torch.sigmoid(n).to(self.device, dtype=torch.bfloat16)
         
-        # Guidance
+        # Create guidance tensor
         guidance = torch.full((batch_size,), guidance_scale, device=self.device, dtype=torch.bfloat16)
         
-        # Expand text_ids to batch size: [1, 512, 3] -> [batch_size, 512, 3]
+        # Expand position IDs to match batch size
         batch_text_ids = text_ids.expand(batch_size, -1, -1)
-        
-        # Expand img_ids to batch size: [H*W, 3] -> [batch_size, H*W, 3]
         batch_img_ids = img_ids.unsqueeze(0).expand(batch_size, -1, -1)
         
         return batch_latents, batch_text_emb, batch_pooled_emb, batch_text_ids, batch_img_ids, timesteps, guidance
@@ -377,38 +349,32 @@ class FluxLoRATrainingWorker(DistributedWorker):
         generator: torch.Generator = None,
     ) -> torch.Tensor:
         """
-        Compute proper Flux flow matching loss.
+        Compute flow matching loss for Flux training.
         
-        This implements the rectified flow objective:
-        - Sample noise
-        - Interpolate between latents and noise using timestep
-        - Predict velocity from latents to noise
-        - Compute MSE loss
-        
-        CRITICAL: Uses class constants instead of dynamic shape extraction to prevent
-        torch.compile recompilation with dynamic=False.
+        Implements the rectified flow objective:
+        1. Sample random noise
+        2. Interpolate between clean latents and noise based on timestep
+        3. Predict velocity vector from noisy latents
+        4. Compute MSE loss against true velocity
         
         Args:
-            generator: GPU generator for reproducible noise. Required for deterministic training.
+            generator: Random generator for reproducible noise generation
         """
         from diffusers import FluxPipeline
         
-        # Generate noise using EXPLICIT shape tuple (not latents.shape which is dynamic)
-        # CRITICAL: Must use explicit tuple of constants, not tensor.shape
+        # Generate noise with explicit shape (uses class constants for torch.compile)
         noise = torch.randn(
             (self.BATCH_SIZE, self.LATENT_CHANNELS, self.LATENT_HEIGHT, self.LATENT_WIDTH),
             generator=generator,
-            dtype=torch.bfloat16,  # Explicit dtype instead of latents.dtype
+            dtype=torch.bfloat16,
             device=latents.device
         )
         
-        # Flow matching: interpolate between latents and noise
-        # Use explicit batch size instead of -1 for dynamic=False
-        weight = timesteps.view(self.BATCH_SIZE, 1, 1, 1)  # Explicit instead of -1
+        # Flow matching interpolation: noisy_latents = (1-t)*clean + t*noise
+        weight = timesteps.view(self.BATCH_SIZE, 1, 1, 1)
         noisy_latents = (1.0 - weight) * latents + weight * noise
         
-        # Pack latents (Flux-specific packing for efficient attention)
-        # Use class constants for all shape parameters to prevent recompilation
+        # Pack latents for Flux transformer (converts to sequence format)
         packed_latents = FluxPipeline._pack_latents(
             noisy_latents,
             batch_size=self.BATCH_SIZE,
@@ -417,8 +383,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             width=self.LATENT_WIDTH,
         )
         
-        # Forward pass through transformer
-
+        # Forward pass through Flux transformer
         model_pred = self.transformer(
             hidden_states=packed_latents,
             timestep=timesteps,
@@ -430,23 +395,22 @@ class FluxLoRATrainingWorker(DistributedWorker):
             return_dict=False
         )[0]
         
-        # Unpack predictions using fixed constants
+        # Unpack predictions back to image space
         model_pred = FluxPipeline._unpack_latents(
             model_pred,
-            height=self.LATENT_HEIGHT * 8 // 2,  # 256 for 64x64 latents
-            width=self.LATENT_WIDTH * 8 // 2,    # 256 for 64x64 latents
+            height=self.LATENT_HEIGHT * 8 // 2,
+            width=self.LATENT_WIDTH * 8 // 2,
             vae_scale_factor=8,
         )
         
-        # Target is the velocity from latents to noise
+        # Compute velocity target: v = noise - clean
         target = noise - latents
         
-        # Convert to float32 for loss computation
-        target = target.float()
-        model_pred = model_pred.float()
-        
-        # Compute MSE loss
-        loss = torch.nn.functional.mse_loss(model_pred, target)
+        # Compute MSE loss in float32 for numerical stability
+        loss = torch.nn.functional.mse_loss(
+            model_pred.float(),
+            target.float()
+        )
         return loss
 
     def _run_training_loop(
@@ -461,32 +425,29 @@ class FluxLoRATrainingWorker(DistributedWorker):
         save_checkpoint: bool = True,
     ) -> dict[str, Any]:
         """
-        Core training loop logic shared by both warmup and training.
+        Core training loop shared by both warmup and actual training.
         
-        This method handles:
-        - Data loading and broadcasting
-        - Device setup
-        - Training loop execution
-        - Checkpoint saving (controlled by save_checkpoint flag)
+        Handles data loading, distributed broadcasting, training iteration,
+        and checkpoint saving.
         
         Args:
-            training_data_path: Path to preprocessed training data
-            max_train_steps: Number of training steps
-            seed: Random seed
-            optimizer: Optimizer (dummy for warmup, real for training)
-            lr_scheduler_obj: LR scheduler (dummy for warmup, real for training)
-            gradient_accumulation_steps: Gradient accumulation steps
-            streaming: Whether to stream progress
-            save_checkpoint: Whether to save checkpoint at end (False for warmup)
+            training_data_path: Path to preprocessed training data (.pt file)
+            max_train_steps: Total number of training steps
+            seed: Random seed for reproducibility
+            optimizer: Optimizer instance
+            lr_scheduler_obj: Learning rate scheduler
+            gradient_accumulation_steps: Steps to accumulate gradients before update
+            streaming: Whether to stream training progress
+            save_checkpoint: Whether to save final checkpoint
             
         Returns:
-            Dict with results (empty for warmup, checkpoint info for training)
+            Dictionary with checkpoint path and training metrics
         """
         # Set seeds for reproducibility
         torch.manual_seed(seed + self.rank)
         torch.cuda.manual_seed(seed + self.rank)
         
-        # Step 1: Load training data (only rank 0)
+        # Load training data on rank 0 and broadcast to all GPUs
         if self.rank == 0:
             self.rank_print(f"Loading training data from {training_data_path}")
             data = torch.load(training_data_path, map_location="cpu", weights_only=False)
@@ -500,14 +461,13 @@ class FluxLoRATrainingWorker(DistributedWorker):
             pooled_embeddings = torch.empty(0)
             text_ids = torch.empty(0, dtype=torch.long)
         
-        # Step 2: Broadcast data to all ranks
-        # IMPORTANT: Set correct CUDA device before broadcast to avoid device mismatch
+        # Broadcast data to all ranks
         torch.cuda.set_device(self.device)
         objects = [latents, text_embeddings, pooled_embeddings, text_ids]
         dist.broadcast_object_list(objects, src=0)
         latents, text_embeddings, pooled_embeddings, text_ids = objects
         
-        # Move to GPU
+        # Transfer to GPU
         latents = latents.to(self.device, dtype=torch.bfloat16)
         text_embeddings = text_embeddings.to(self.device, dtype=torch.bfloat16)
         pooled_embeddings = pooled_embeddings.to(self.device, dtype=torch.bfloat16)
@@ -517,20 +477,18 @@ class FluxLoRATrainingWorker(DistributedWorker):
         self.rank_print(f"Loaded {num_samples} training samples")
         self.rank_print(f"Data shapes: latents={latents.shape}, text_emb={text_embeddings.shape}, pooled={pooled_embeddings.shape}, text_ids={text_ids.shape}")
         
-        # CRITICAL: Rescale latents to match warmup dimensions to prevent recompilation
-        # torch.compile with dynamic=False requires EXACT dimension matching
+        # Validate latent channels
         if latents.shape[1] != self.LATENT_CHANNELS:
             raise ValueError(
                 f"Latent channels mismatch! Expected {self.LATENT_CHANNELS}, got {latents.shape[1]}. "
-                f"Cannot rescale channels - this indicates wrong VAE model. "
-                f"Flux requires 16-channel VAE."
+                f"This indicates incorrect VAE configuration. Flux requires 16-channel VAE."
             )
         
-        # Automatically rescale spatial dimensions if needed
+        # Rescale spatial dimensions if needed (for torch.compile compatibility)
         if latents.shape[2] != self.LATENT_HEIGHT or latents.shape[3] != self.LATENT_WIDTH:
             self.rank_print(
                 f"⚠️  Rescaling latents from [{latents.shape[2]}, {latents.shape[3]}] "
-                f"to [{self.LATENT_HEIGHT}, {self.LATENT_WIDTH}] to match compilation dimensions. "
+                f"to [{self.LATENT_HEIGHT}, {self.LATENT_WIDTH}]. "
                 f"For best quality, preprocess images to {self.IMAGE_SIZE}x{self.IMAGE_SIZE} pixels."
             )
             latents = torch.nn.functional.interpolate(
@@ -541,25 +499,24 @@ class FluxLoRATrainingWorker(DistributedWorker):
             )
             self.rank_print(f"✓ Latents rescaled to {latents.shape}")
         else:
-            self.rank_print(f"✓ Latent dimensions match warmup: {latents.shape}")
+            self.rank_print(f"✓ Latent dimensions: {latents.shape}")
         
-        # Step 3: Prepare image IDs using shared helper method (identical to warmup)
+        # Prepare image position IDs
         img_ids = self.create_img_ids(
             latent_height=self.LATENT_HEIGHT,
             latent_width=self.LATENT_WIDTH
         )
         
-        # Step 4: Set up random generators
-        # GPU generator for noise (faster), CPU generator for timesteps (deterministic)
+        # Initialize random generators
         gpu_generator = torch.Generator(device=self.device).manual_seed(seed + self.rank)
         cpu_generator = torch.Generator(device='cpu').manual_seed(seed)
         
-        # Step 7: Training loop
+        # Training loop
         self.transformer.train()
         total_loss = 0.0
         
         for step in range(max_train_steps):
-            # Run training step using IDENTICAL method as warmup
+            # Run training step
             loss = self.run_training_step(
                 latents=latents,
                 text_embeddings=text_embeddings,
@@ -572,7 +529,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 gradient_accumulation_steps=gradient_accumulation_steps,
             )
             
-            # Update weights - happens every time (including warmup with dummy optimizer)
+            # Update model weights
             if (step + 1) % gradient_accumulation_steps == 0:
                 optimizer.step()
                 lr_scheduler_obj.step()
@@ -580,7 +537,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             
             total_loss += loss.item() * gradient_accumulation_steps
             
-            # Stream progress (only rank 0, only during actual training not warmup)
+            # Stream progress updates
             if streaming and self.rank == 0 and step % 10 == 0:
                 avg_loss = total_loss / (step + 1)
                 current_lr = optimizer.param_groups[0]['lr']
@@ -599,45 +556,38 @@ class FluxLoRATrainingWorker(DistributedWorker):
             
 
         
-        # Final average loss
+        # Calculate final metrics
         avg_loss = total_loss / max_train_steps if max_train_steps > 0 else 0.0
         self.rank_print(f"Training complete! Average loss: {avg_loss:.6f}")
         
-        # Step 9: Save checkpoint (only rank 0, only when requested)
+        # Save checkpoint (rank 0 only)
         if save_checkpoint and self.rank == 0:
             self.rank_print("Saving checkpoint...")
             
-            # Extract LoRA weights using proper Flux pipeline format
             from peft import get_peft_model_state_dict
             from diffusers import FluxPipeline
             import shutil
             
-            # Get the underlying module from DDP
+            # Unwrap model from DDP
             model_to_save = self.transformer.module
             
-            # If torch.compile was used, unwrap the compiled model to access the original
-            # torch.compile wraps the model and stores the original in _orig_mod
+            # Unwrap from torch.compile if applicable
             if self.use_torch_compile and hasattr(model_to_save, '_orig_mod'):
-                self.rank_print("Unwrapping torch.compiled model...")
                 model_to_save = model_to_save._orig_mod
             
-            # Extract only LoRA parameters
+            # Extract LoRA weights
             lora_state_dict = get_peft_model_state_dict(model_to_save)
             
-            # Create temporary directory for proper LoRA format
-            # FluxPipeline.save_lora_weights creates the correct format for loading
+            # Save in Flux-compatible format
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Save using FluxPipeline format (creates pytorch_lora_weights.safetensors)
                 FluxPipeline.save_lora_weights(
                     save_directory=temp_dir,
                     transformer_lora_layers=lora_state_dict,
                     text_encoder_lora_layers=None,
                 )
                 
-                # The saved file will be pytorch_lora_weights.safetensors
                 source_path = Path(temp_dir) / "pytorch_lora_weights.safetensors"
                 
-                # Copy to a permanent location
                 with tempfile.NamedTemporaryFile(
                     mode='wb',
                     suffix='.safetensors',
@@ -657,7 +607,6 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 "num_steps": max_train_steps,
             }
         
-        # Other ranks return empty dict
         return {}
 
     def __call__(
@@ -674,25 +623,31 @@ class FluxLoRATrainingWorker(DistributedWorker):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Production-ready training function with proper Flux training logic.
+        Train a Flux LoRA model.
         
-        IMPORTANT FIXED PARAMETERS (to prevent torch.compile recompilation):
-        - batch_size: Fixed at 4
-        - guidance_scale: Fixed at 1.0
-        - latent_dims: Automatically rescaled to [16, 64, 64]
+        Note: When torch.compile is enabled (default), batch_size is fixed at 4 and
+        guidance_scale at 1.0. Use gradient_accumulation_steps for larger effective batch sizes.
         
-        If you need different effective batch sizes, use gradient_accumulation_steps.
-        
-        This method sets up the optimizer and scheduler, then calls the shared
-        _run_training_loop method that is also used by warmup.
+        Args:
+            streaming: Whether to stream training progress
+            training_data_path: Path to preprocessed training data
+            learning_rate: Base learning rate for lora_A parameters
+            b_up_factor: Multiplier for lora_B learning rate (typically 2.0)
+            max_train_steps: Number of training steps
+            gradient_accumulation_steps: Steps to accumulate gradients
+            lr_scheduler: Learning rate scheduler type
+            lr_warmup_steps: Number of warmup steps for scheduler
+            seed: Random seed for reproducibility
+            
+        Returns:
+            Dictionary containing checkpoint path and training metrics
         """
         self.rank_print(f"Starting training: lr={learning_rate}, steps={max_train_steps}, batch_size={self.BATCH_SIZE}")
         
-        # Set up optimizer with DUAL learning rates for lora_A and lora_B
+        # Configure optimizer with dual learning rates for LoRA matrices
         params_A = []
         params_B = []
         
-        # Get the underlying module from DDP
         model = self.transformer.module
         
         for name, param in model.named_parameters():
@@ -702,13 +657,13 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 elif "lora_B" in name:
                     params_B.append(param)
         
-        # Create optimizer with different LRs
+        # lora_B typically trains with higher LR than lora_A
         optimizer = torch.optim.AdamW([
             {"params": params_A, "lr": learning_rate, "weight_decay": 0.1},
             {"params": params_B, "lr": learning_rate * b_up_factor, "weight_decay": 0.1},
         ], betas=(0.9, 0.999), eps=1e-8)
         
-        # Set up learning rate scheduler
+        # Configure learning rate scheduler
         from diffusers.optimization import get_scheduler as get_diffusers_scheduler
         
         lr_scheduler_obj = get_diffusers_scheduler(
@@ -718,7 +673,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             num_training_steps=max_train_steps,
         )
         
-        # Call the shared training loop (same as warmup but with real optimizer and checkpoint saving)
+        # Run training
         return self._run_training_loop(
             training_data_path=training_data_path,
             max_train_steps=max_train_steps,
@@ -727,5 +682,5 @@ class FluxLoRATrainingWorker(DistributedWorker):
             lr_scheduler_obj=lr_scheduler_obj,
             gradient_accumulation_steps=gradient_accumulation_steps,
             streaming=streaming,
-            save_checkpoint=True,  # Save checkpoint at end of training
+            save_checkpoint=True,
         )
