@@ -615,6 +615,12 @@ class FluxLoRATrainingWorker(DistributedWorker):
             # Get the underlying module from DDP
             model_to_save = self.transformer.module
             
+            # If torch.compile was used, unwrap the compiled model to access the original
+            # torch.compile wraps the model and stores the original in _orig_mod
+            if self.use_torch_compile and hasattr(model_to_save, '_orig_mod'):
+                self.rank_print("Unwrapping torch.compiled model...")
+                model_to_save = model_to_save._orig_mod
+            
             # Extract only LoRA parameters
             lora_state_dict = get_peft_model_state_dict(model_to_save)
             
