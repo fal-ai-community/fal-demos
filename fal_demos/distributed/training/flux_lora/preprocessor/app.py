@@ -37,7 +37,7 @@ class PreprocessRequest(BaseModel):
         description="Reserved for future use (face detection not yet implemented)"
     )
     resolution: int = Field(
-        default=512,
+        default=1024,
         description="Training resolution",
         ge=256,
         le=1024,

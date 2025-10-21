@@ -386,7 +386,7 @@ class FluxPreprocessorWorker(DistributedWorker):
         images_zip_url: str = None,
         request_id: str = None,
         trigger_word: str = "ohwx",
-        resolution: int = 512,
+        resolution: int = 1024,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
