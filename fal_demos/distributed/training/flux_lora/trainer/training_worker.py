@@ -28,20 +28,20 @@ class FluxLoRATrainingWorker(DistributedWorker):
     Distributed worker for Flux LoRA training.
     
     When torch.compile is enabled (default), these parameters are fixed to avoid recompilation:
-    - BATCH_SIZE: 4
-    - LATENT_DIMS: [16, 64, 64] (512x512 images)
+    - BATCH_SIZE: 1
+    - LATENT_DIMS: [16, 128, 128] (1024x1024 images)
     - GUIDANCE_SCALE: 1.0
     
     For different effective batch sizes, use gradient_accumulation_steps.
     """
     
     # Fixed constants for torch.compile optimization
-    BATCH_SIZE = 4
+    BATCH_SIZE = 1
     LATENT_CHANNELS = 16
-    LATENT_HEIGHT = 64
-    LATENT_WIDTH = 64
+    LATENT_HEIGHT = 128
+    LATENT_WIDTH = 128
     GUIDANCE_SCALE = 1.0
-    IMAGE_SIZE = LATENT_HEIGHT * 8  # 512 pixels
+    IMAGE_SIZE = LATENT_HEIGHT * 8  # 1024 pixels
 
     def setup(self, model_path: str = "/data/flux_weights", use_torch_compile: bool = True, **kwargs: Any) -> None:
         """
@@ -625,7 +625,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         """
         Train a Flux LoRA model.
         
-        Note: When torch.compile is enabled (default), batch_size is fixed at 4 and
+        Note: When torch.compile is enabled (default), batch_size is fixed at 1 and
         guidance_scale at 1.0. Use gradient_accumulation_steps for larger effective batch sizes.
         
         Args:
