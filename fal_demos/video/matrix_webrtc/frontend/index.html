@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Matrix WebRTC Client</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Matrix WebRTC Client</h1>
+        <p>Connects to the /webrtc endpoint and streams video over WebRTC.</p>
+      </header>
+
+      <section class="panel">
+        <div class="field">
+          <label for="appId">Endpoint</label>
+          <input id="appId" type="text" value="myuser/myapp/webrtc" />
+        </div>
+        <div class="field">
+          <label for="apiKey">Fal API Key</label>
+          <input id="apiKey" type="password" placeholder="paste your key" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="controls">
+          <div class="control-group">
+            <div class="control-title">Move (WASD)</div>
+            <div class="pad">
+              <button class="control-btn" data-move="w">W</button>
+              <div class="pad-row">
+                <button class="control-btn" data-move="a">A</button>
+                <button class="control-btn" data-move="s">S</button>
+                <button class="control-btn" data-move="d">D</button>
+              </div>
+            </div>
+          </div>
+          <div class="control-group">
+            <div class="control-title">Look (IJKL)</div>
+            <div class="pad">
+              <button class="control-btn" data-look="i">I</button>
+              <div class="pad-row">
+                <button class="control-btn" data-look="j">J</button>
+                <button class="control-btn" data-look="k">K</button>
+                <button class="control-btn" data-look="l">L</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="buttons">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+          <button id="pauseBtn" disabled>Pause (Space)</button>
+        </div>
+        <div class="status" id="status">Disconnected</div>
+      </section>
+
+      <section class="panel">
+        <h2>Remote Video</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+      </section>
+
+      <section class="panel">
+        <h2>Logs</h2>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
