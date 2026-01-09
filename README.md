@@ -213,6 +213,12 @@ The [`fal_demos/distributed/training/flux_lora/`](fal_demos/distributed/training
 **Overview**:
 This is a complete Flux LoRA training pipeline that accepts raw images in a ZIP file and produces a trained LoRA checkpoint. It includes multi-GPU preprocessing (VAE encoding, caption generation) and multi-GPU training using DDP.
 
+---
+
+## 7. Matrix WebRTC
+
+The [`fal_demos/video/matrix_webrtc/`](fal_demos/video/matrix_webrtc/) demo streams a Matrix-Game session over WebRTC with a small Vite frontend. It shows how to expose a websocket WebRTC endpoint with `fal.App`, forward keyboard actions, and stream frames to a browser client. Run instructions are in [`fal_demos/video/matrix_webrtc/README.md`](fal_demos/video/matrix_webrtc/README.md).
+
 **Key fal Concepts Demonstrated**:
 
 The pipeline consists of two main components:
