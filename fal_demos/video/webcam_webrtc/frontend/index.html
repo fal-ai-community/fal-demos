@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webcam WebRTC Echo Client</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Webcam WebRTC Echo Client</h1>
+        <p>Send your webcam to the app and see the echoed stream side-by-side.</p>
+      </header>
+
+      <section class="panel">
+        <div class="field">
+          <label for="appId">Endpoint</label>
+          <input id="appId" type="text" value="myuser/myapp/webrtc" />
+        </div>
+        <div class="field">
+          <label for="apiKey">Fal API Key</label>
+          <input id="apiKey" type="password" placeholder="paste your key" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="buttons">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+        <div class="status" id="status">Disconnected</div>
+      </section>
+
+      <section class="panel">
+        <h2>Video Feeds</h2>
+        <div class="video-grid">
+          <div class="video-card">
+            <div class="video-title">Your Webcam</div>
+            <div class="metric-row">
+              <div class="fps" id="localFps">FPS: --</div>
+              <div class="resolution" id="localRes">-- x --</div>
+            </div>
+            <div class="bitrate" id="localBitrate">Up: -- Mbps</div>
+            <video id="localVideo" autoplay playsinline muted></video>
+          </div>
+          <div class="video-card">
+            <div class="video-title">Echoed Stream</div>
+            <div class="metric-row">
+              <div class="fps" id="remoteFps">FPS: --</div>
+              <div class="resolution" id="remoteRes">-- x --</div>
+            </div>
+            <div class="bitrate" id="remoteBitrate">Down: -- Mbps</div>
+            <video id="remoteVideo" autoplay playsinline></video>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Logs</h2>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
