@@ -219,6 +219,8 @@ This is a complete Flux LoRA training pipeline that accepts raw images in a ZIP 
 
 The [`fal_demos/video/matrix_webrtc/`](fal_demos/video/matrix_webrtc/) demo streams a Matrix-Game session over WebRTC with a small Vite frontend. It shows how to expose a websocket WebRTC endpoint with `fal.App`, forward keyboard actions, and stream frames to a browser client. Run instructions are in [`fal_demos/video/matrix_webrtc/README.md`](fal_demos/video/matrix_webrtc/README.md).
 
+The [`fal_demos/video/yolo_webcam_webrtc/`](fal_demos/video/yolo_webcam_webrtc/) demo sends a webcam stream over WebRTC, runs YOLO on each frame, and streams the annotated video back to the browser. Run instructions are in [`fal_demos/video/yolo_webcam_webrtc/README.md`](fal_demos/video/yolo_webcam_webrtc/README.md).
+
 **Key fal Concepts Demonstrated**:
 
 The pipeline consists of two main components:

@@ -1,33 +1,33 @@
 import asyncio
 import json
+import os
 
 import fal
 from fastapi import WebSocket
 
 
 class WebcamWebRtc(fal.App):
+    machine_type = "GPU-H100"
     requirements = [
         "aiortc",
         "av",
+        "numpy",
+        "opencv-python",
+        "ultralytics",
     ]
+
+    def setup(self):
+        from ultralytics import YOLO
+    
+        model_path = "/data/yolov8n.pt"
+        self.yolo_model = YOLO(model_path)
 
     @fal.endpoint("/webrtc", is_websocket=True)
     async def webrtc(self, ws: WebSocket):
         from aiortc import RTCPeerConnection, RTCSessionDescription
         from aiortc.contrib.media import MediaBlackhole
-        from aiortc.mediastreams import MediaStreamTrack
         from aiortc.sdp import candidate_from_sdp
         from starlette.websockets import WebSocketDisconnect, WebSocketState
-
-        class PassthroughVideoTrack(MediaStreamTrack):
-            kind = "video"
-
-            def __init__(self, source_track):
-                super().__init__()
-                self.source_track = source_track
-
-            async def recv(self):
-                return await self.source_track.recv()
 
         await ws.accept()
         await ws.send_json({"type": "ready"})
@@ -71,7 +71,7 @@ class WebcamWebRtc(fal.App):
         @pc.on("track")
         def on_track(track):
             if track.kind == "video":
-                pc.addTrack(PassthroughVideoTrack(track))
+                pc.addTrack(create_yolo_track(track, self.yolo_model))
             else:
                 asyncio.ensure_future(blackhole.consume(track))
 
@@ -127,3 +127,59 @@ class WebcamWebRtc(fal.App):
             stop_event.set()
             await blackhole.stop()
             await pc.close()
+
+
+def draw_boxes(image, detections):
+    import cv2
+
+    if detections is None:
+        return image
+
+    for box in detections.boxes:
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        cls_id = int(box.cls[0])
+        score = float(box.conf[0])
+        label = f"{detections.names.get(cls_id, 'obj')} {score:.2f}"
+        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+        cv2.putText(
+            image,
+            label,
+            (int(x1), int(y1) - 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
+    return image
+
+
+def create_yolo_track(source_track, yolo_model):
+    from aiortc.mediastreams import MediaStreamTrack
+    from av import VideoFrame
+
+    class YOLOTrack(MediaStreamTrack):
+        kind = "video"
+
+        def __init__(self, track, model):
+            super().__init__()
+            self.source_track = track
+            self.model = model
+
+        async def recv(self):
+            frame = await self.source_track.recv()
+            img = frame.to_ndarray(format="bgr24")
+
+            try:
+                detections = self.model(img, verbose=False)[0]
+                annotated = draw_boxes(img.copy(), detections)
+            except Exception as exc:
+                print(f"YOLO inference error: {exc}")
+                annotated = img
+
+            new_frame = VideoFrame.from_ndarray(annotated, format="bgr24")
+            new_frame.pts = frame.pts
+            new_frame.time_base = frame.time_base
+            return new_frame
+
+    return YOLOTrack(source_track, yolo_model)
