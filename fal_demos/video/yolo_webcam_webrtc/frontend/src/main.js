@@ -1,4 +1,4 @@
-const TOKEN_EXPIRATION_SECONDS = 120;
+import { createFalClient } from "@fal-ai/client";
 
 const appIdInput = document.getElementById("appId");
 const apiKeyInput = document.getElementById("apiKey");
@@ -15,14 +15,17 @@ const remoteBitrateEl = document.getElementById("remoteBitrate");
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
 
-let ws = null;
+let connection = null;
 let pc = null;
 let started = false;
-let authToken = "";
 let localStream = null;
 let localFpsStop = null;
 let remoteFpsStop = null;
 let bitrateStop = null;
+let falClient = null;
+let serverReady = false;
+let localStreamReady = false;
+let offerSent = false;
 
 const envApiKey = import.meta.env.FAL_KEY || import.meta.env.VITE_FAL_KEY;
 if (envApiKey) {
@@ -58,42 +61,33 @@ const parseEndpointId = (id) => {
   };
 };
 
-const buildWsUrl = (appId, token) => {
-  const normalizedAppId = normalizeAppId(appId);
-  return `wss://fal.run/${normalizedAppId}?fal_jwt_token=${encodeURIComponent(token)}`;
+const encodeJsonMessage = (input) => {
+  if (input instanceof Uint8Array) {
+    return input;
+  }
+  const payload = typeof input === "string" ? input : JSON.stringify(input);
+  return new TextEncoder().encode(payload);
 };
 
-const getTemporaryAuthToken = async (appId, apiKey) => {
-  const { alias } = parseEndpointId(appId);
-  const response = await fetch("https://rest.alpha.fal.ai/tokens/", {
-    method: "POST",
-    headers: {
-      Authorization: `Key ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      allowed_apps: [alias],
-      token_expiration: TOKEN_EXPIRATION_SECONDS,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Token request failed: ${response.status} ${errorBody}`);
+const decodeJsonMessage = async (data) => {
+  if (typeof data === "string") {
+    return JSON.parse(data);
   }
-
-  const token = await response.json();
-  if (typeof token !== "string" && token?.detail) {
-    return token.detail;
+  if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
+    return JSON.parse(new TextDecoder().decode(data));
   }
-  return token;
+  if (data instanceof Blob) {
+    return JSON.parse(
+      new TextDecoder().decode(new Uint8Array(await data.arrayBuffer())),
+    );
+  }
+  return data;
 };
 
 const stop = () => {
-  if (ws) {
-    ws.close();
-    ws = null;
+  if (connection) {
+    connection.close();
+    connection = null;
   }
   if (pc) {
     pc.close();
@@ -124,6 +118,9 @@ const stop = () => {
   localBitrateEl.textContent = "Up: -- Mbps";
   remoteBitrateEl.textContent = "Down: -- Mbps";
   setStatus("Disconnected");
+  serverReady = false;
+  localStreamReady = false;
+  offerSent = false;
 };
 
 const ensurePeer = async () => {
@@ -139,17 +136,16 @@ const ensurePeer = async () => {
   };
 
   pc.onicecandidate = (event) => {
-    if (event.candidate && ws) {
-      ws.send(
-        JSON.stringify({
-          type: "icecandidate",
-          candidate: {
-            candidate: event.candidate.candidate,
-            sdpMid: event.candidate.sdpMid,
-            sdpMLineIndex: event.candidate.sdpMLineIndex,
-          },
-        }),
-      );
+    if (event.candidate && connection) {
+      log("Sending icecandidate");
+      connection.send({
+        type: "icecandidate",
+        candidate: {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        },
+      });
     }
   };
 
@@ -171,12 +167,21 @@ const attachLocalStream = async () => {
   localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   localVideo.srcObject = localStream;
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+  localStreamReady = true;
+  maybeSendOffer();
   if (localFpsStop) {
     localFpsStop();
   }
   localFpsStop = startFpsCounter(localVideo, localFpsEl, localResEl);
   if (!bitrateStop) {
     bitrateStop = startBitrateMonitor();
+  }
+};
+
+const maybeSendOffer = () => {
+  if (!offerSent && serverReady && pc && localStreamReady) {
+    offerSent = true;
+    sendOffer();
   }
 };
 
@@ -270,7 +275,8 @@ const startBitrateMonitor = () => {
 const sendOffer = async () => {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  ws?.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+  log("Sending offer");
+  connection?.send({ type: "offer", sdp: offer.sdp });
 };
 
 startBtn.addEventListener("click", async () => {
@@ -279,6 +285,37 @@ startBtn.addEventListener("click", async () => {
   startBtn.disabled = true;
   stopBtn.disabled = false;
   logEl.textContent = "";
+
+  if (!window.__falWsPatched) {
+    const OriginalWebSocket = window.WebSocket;
+    class LoggingWebSocket extends OriginalWebSocket {
+      constructor(url, protocols) {
+        log(`WS url: ${url}`);
+        super(url, protocols);
+        this.addEventListener("open", () => log("WS open"));
+        this.addEventListener("close", (ev) =>
+          log(`WS close code=${ev.code} reason=${ev.reason || "n/a"}`),
+        );
+        this.addEventListener("error", () => log("WS error"));
+      }
+    }
+    // Preserve readyState constants without mutating read-only properties.
+    ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach((key) => {
+      if (key in OriginalWebSocket) {
+        try {
+          Object.defineProperty(LoggingWebSocket, key, {
+            value: OriginalWebSocket[key],
+            writable: false,
+            enumerable: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
+    });
+    window.WebSocket = LoggingWebSocket;
+    window.__falWsPatched = true;
+  }
 
   const appId = normalizeAppId(appIdInput.value.trim());
   const apiKey = apiKeyInput.value.trim();
@@ -291,82 +328,86 @@ startBtn.addEventListener("click", async () => {
     return;
   }
 
+  let endpoint = "";
+  let path = "";
   try {
-    authToken = await getTemporaryAuthToken(appId, apiKey);
+    const parsed = parseEndpointId(appId);
+    endpoint = `${parsed.owner}/${parsed.alias}`;
+    path = parsed.path ?? "";
   } catch (err) {
-    log(`Failed to fetch token: ${err.message || err}`);
+    log(err.message || err);
     stop();
     startBtn.disabled = false;
     stopBtn.disabled = true;
     started = false;
     return;
   }
+  const connectionKey = `webrtc:${endpoint}:${path || "realtime"}`;
+  log(`App ID: ${appId}`);
+  log(`Endpoint: ${endpoint}`);
+  log(`Path: ${path || "(default /realtime)"}`);
+  log(`Connection key: ${connectionKey}`);
 
-  const wsUrl = buildWsUrl(appId, authToken);
-  ws = new WebSocket(wsUrl);
+  falClient = createFalClient({
+    credentials: apiKey,
+    suppressLocalCredentialsWarning: true,
+  });
 
-  ws.onopen = async () => {
-    setStatus("Connected");
-    log("WebSocket open.");
-    await ensurePeer();
-    try {
-      await attachLocalStream();
-    } catch (err) {
-      log(`Failed to get webcam: ${err.message || err}`);
+  connection = falClient.realtime.connect(endpoint, {
+    connectionKey,
+    path: path || undefined,
+    throttleInterval: 0,
+    encodeMessage: encodeJsonMessage,
+    decodeMessage: decodeJsonMessage,
+    onResult: async (msg) => {
+      if (msg.type === "answer" && msg.sdp) {
+        await pc.setRemoteDescription(
+          new RTCSessionDescription({ type: "answer", sdp: msg.sdp }),
+        );
+      } else if (msg.type === "icecandidate") {
+        const c = msg.candidate;
+        if (c) {
+          await pc.addIceCandidate(
+            new RTCIceCandidate({
+              candidate: c.candidate,
+              sdpMid: c.sdpMid,
+              sdpMLineIndex: c.sdpMLineIndex,
+            }),
+          );
+        }
+      } else if (msg.type === "error") {
+        log(`Server error: ${msg.error}`);
+      } else if (msg.type === "ready") {
+        setStatus("Connected");
+        log("Server ready.");
+        serverReady = true;
+        maybeSendOffer();
+      } else {
+        log(`WS message: ${JSON.stringify(msg)}`);
+      }
+    },
+    onError: (err) => {
+      log(`Realtime error: ${err.message || err}`);
       stop();
       startBtn.disabled = false;
       stopBtn.disabled = true;
       started = false;
-      return;
-    }
-    await sendOffer();
-  };
+    },
+  });
+  log("Triggering connection");
+  connection.send({ type: "hello" });
 
-  ws.onmessage = async (event) => {
-    let msg = null;
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      log(`WS: ${event.data}`);
-      return;
-    }
-
-    if (msg.type === "answer" && msg.sdp) {
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp }));
-    } else if (msg.type === "icecandidate") {
-      const c = msg.candidate;
-      if (c) {
-        await pc.addIceCandidate(new RTCIceCandidate({
-          candidate: c.candidate,
-          sdpMid: c.sdpMid,
-          sdpMLineIndex: c.sdpMLineIndex,
-        }));
-      }
-    } else if (msg.type === "error") {
-      log(`Server error: ${msg.error}`);
-    } else if (msg.type === "ready") {
-      log("Server ready.");
-    } else {
-      log(`WS message: ${event.data}`);
-    }
-  };
-
-  ws.onclose = (ev) => {
-    log(`WebSocket closed code=${ev.code} reason=${ev.reason}`);
+  setStatus("Connecting");
+  try {
+    await ensurePeer();
+    await attachLocalStream();
+  } catch (err) {
+    log(`Failed to start: ${err.message || err}`);
     stop();
     startBtn.disabled = false;
     stopBtn.disabled = true;
     started = false;
-  };
-
-  ws.onerror = (err) => {
-    log("WebSocket error.");
-    console.error(err);
-    stop();
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    started = false;
-  };
+  }
 });
 
 stopBtn.addEventListener("click", () => {

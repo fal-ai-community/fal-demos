@@ -29,8 +29,11 @@ class WebcamWebRtc(fal.App):
         from aiortc.sdp import candidate_from_sdp
         from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+        print("WebRTC: websocket connect")
         await ws.accept()
+        print("WebRTC: websocket accepted")
         await ws.send_json({"type": "ready"})
+        print("WebRTC: sent ready")
 
         pc = RTCPeerConnection()
         blackhole = MediaBlackhole()
@@ -49,6 +52,7 @@ class WebcamWebRtc(fal.App):
 
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
+            print("WebRTC: local icecandidate", "none" if candidate is None else "ok")
             if candidate is None:
                 await safe_send_json({"type": "icecandidate", "candidate": None})
                 return
@@ -65,25 +69,30 @@ class WebcamWebRtc(fal.App):
 
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
+            print(f"WebRTC: connection state {pc.connectionState}")
             if pc.connectionState in ("failed", "closed", "disconnected"):
                 stop_event.set()
 
         @pc.on("track")
         def on_track(track):
+            print(f"WebRTC: track {track.kind}")
             if track.kind == "video":
                 pc.addTrack(create_yolo_track(track, self.yolo_model))
             else:
                 asyncio.ensure_future(blackhole.consume(track))
 
         async def handle_offer(payload):
+            print("WebRTC: received offer")
             offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
             await pc.setRemoteDescription(offer)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             await safe_send_json({"type": "answer", "sdp": pc.localDescription.sdp})
+            print("WebRTC: sent answer")
             return True
 
         async def handle_icecandidate(payload):
+            print("WebRTC: received icecandidate")
             candidate = payload.get("candidate")
             if candidate is None:
                 await pc.addIceCandidate(None)
@@ -97,6 +106,7 @@ class WebcamWebRtc(fal.App):
         async def handle_payload(payload):
             if isinstance(payload, dict):
                 msg_type = payload.get("type")
+                print(f"WebRTC: received action {msg_type}")
                 if msg_type == "offer":
                     return await handle_offer(payload)
                 if msg_type == "icecandidate":
@@ -105,12 +115,25 @@ class WebcamWebRtc(fal.App):
 
         async def receive_payload():
             try:
-                message = await ws.receive_text()
+                raw = await ws.receive()
             except RuntimeError:
+                return None
+            if raw is None:
+                return None
+            if raw.get("type") == "websocket.disconnect":
+                return None
+            if raw.get("bytes") is None:
+                print("WebRTC: expected bytes payload, got none")
+                return None
+            try:
+                message = raw.get("bytes").decode("utf-8")
+            except Exception as exc:
+                print(f"WebRTC: failed to decode bytes payload {exc}")
                 return None
             try:
                 return json.loads(message)
             except json.JSONDecodeError:
+                print(f"WebRTC: received raw payload {message}")
                 return message
 
         try:
@@ -122,8 +145,10 @@ class WebcamWebRtc(fal.App):
                 if not should_continue:
                     break
         except WebSocketDisconnect:
+            print("WebRTC: websocket disconnect")
             pass
         finally:
+            print("WebRTC: websocket closing")
             stop_event.set()
             await blackhole.stop()
             await pc.close()
