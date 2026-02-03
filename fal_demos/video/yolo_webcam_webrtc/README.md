@@ -17,7 +17,7 @@ or
 fal deploy yolo.py
 ```
 
-## Run the frontend
+## Run js client
 
 ```bash
 cd frontend
@@ -26,6 +26,15 @@ FAL_KEY=myfalkey npm run dev
 
 Open the Vite dev server in your browser and set the Endpoint field to the
 full WebRTC endpoint (for example: `myuser/myapp/webrtc`).
+
+## Run python client (alternative)
+
+Alternatively, you can run the python client that will open 2 OpenCV windows for
+the local webcam and the annotated stream.
+
+```bash
+python yolo_client.py  --endpoints myuser/myapp/realtime
+```
 
 ## Model configuration
 

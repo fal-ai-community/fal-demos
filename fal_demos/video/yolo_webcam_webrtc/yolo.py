@@ -1,9 +1,9 @@
 import asyncio
-import json
-import os
+from contextlib import suppress
+from typing import AsyncIterator
 
 import fal
-from fastapi import WebSocket
+from fastapi import WebSocketDisconnect
 
 
 class WebcamWebRtc(fal.App):
@@ -22,37 +22,28 @@ class WebcamWebRtc(fal.App):
         model_path = "/data/yolov8n.pt"
         self.yolo_model = YOLO(model_path)
 
-    @fal.endpoint("/webrtc", is_websocket=True)
-    async def webrtc(self, ws: WebSocket):
+    @fal.realtime("/realtime")
+    async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
         from aiortc import RTCPeerConnection, RTCSessionDescription
         from aiortc.contrib.media import MediaBlackhole
         from aiortc.sdp import candidate_from_sdp
-        from starlette.websockets import WebSocketDisconnect, WebSocketState
-
-        await ws.accept()
-        await ws.send_json({"type": "ready"})
 
         pc = RTCPeerConnection()
         blackhole = MediaBlackhole()
         stop_event = asyncio.Event()
+        outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
 
-        async def safe_send_json(payload):
-            try:
-                if (
-                    ws.client_state != WebSocketState.CONNECTED
-                    or ws.application_state != WebSocketState.CONNECTED
-                ):
-                    return
-                await ws.send_json(payload)
-            except (RuntimeError, WebSocketDisconnect):
-                pass
+        async def send(payload: dict) -> None:
+            if stop_event.is_set():
+                return
+            await outgoing.put(payload)
 
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate is None:
-                await safe_send_json({"type": "icecandidate", "candidate": None})
+                await send({"type": "icecandidate", "candidate": None})
                 return
-            await safe_send_json(
+            await send(
                 {
                     "type": "icecandidate",
                     "candidate": {
@@ -64,9 +55,10 @@ class WebcamWebRtc(fal.App):
             )
 
         @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
+        async def on_connectionstatechange() -> None:
             if pc.connectionState in ("failed", "closed", "disconnected"):
                 stop_event.set()
+                await outgoing.put(None)
 
         @pc.on("track")
         def on_track(track):
@@ -80,7 +72,7 @@ class WebcamWebRtc(fal.App):
             await pc.setRemoteDescription(offer)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-            await safe_send_json({"type": "answer", "sdp": pc.localDescription.sdp})
+            await send({"type": "answer", "sdp": pc.localDescription.sdp})
             return True
 
         async def handle_icecandidate(payload):
@@ -103,28 +95,33 @@ class WebcamWebRtc(fal.App):
                     return await handle_icecandidate(payload)
             return True
 
-        async def receive_payload():
+        async def input_loop() -> None:
             try:
-                message = await ws.receive_text()
-            except RuntimeError:
-                return None
-            try:
-                return json.loads(message)
-            except json.JSONDecodeError:
-                return message
+                async for payload in inputs:
+                    if stop_event.is_set():
+                        break
+                    should_continue = await handle_payload(payload)
+                    if not should_continue:
+                        break
+            finally:
+                stop_event.set()
+                await outgoing.put(None)
 
+        input_task: asyncio.Task | None = None
         try:
-            while not stop_event.is_set():
-                payload = await receive_payload()
+            await outgoing.put({"type": "ready"})
+            input_task = asyncio.create_task(input_loop())
+            while True:
+                payload = await outgoing.get()
                 if payload is None:
-                    break
-                should_continue = await handle_payload(payload)
-                if not should_continue:
-                    break
-        except WebSocketDisconnect:
-            pass
+                    raise WebSocketDisconnect()
+                yield payload
         finally:
             stop_event.set()
+            if input_task is not None:
+                input_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await input_task
             await blackhole.stop()
             await pc.close()
 
@@ -183,3 +180,14 @@ def create_yolo_track(source_track, yolo_model):
             return new_frame
 
     return YOLOTrack(source_track, yolo_model)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    from yolo_client import run
+
+    info = WebcamWebRtc.spawn()
+    print(f"App ID: {info.application}")
+    info.wait()
+    run(endpoint=info.application + "/realtime")
