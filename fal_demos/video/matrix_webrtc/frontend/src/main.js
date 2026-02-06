@@ -1,7 +1,8 @@
+import { decode, encode } from "@msgpack/msgpack";
+
 const TOKEN_EXPIRATION_SECONDS = 120;
 
 const appIdInput = document.getElementById("appId");
-const apiKeyInput = document.getElementById("apiKey");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const pauseBtn = document.getElementById("pauseBtn");
@@ -16,11 +17,6 @@ let started = false;
 let authToken = "";
 let paused = false;
 
-const envApiKey = import.meta.env.FAL_KEY || import.meta.env.VITE_FAL_KEY;
-if (envApiKey) {
-  apiKeyInput.value = envApiKey;
-}
-
 const log = (msg) => {
   console.log(msg);
   logEl.textContent = String(msg) + "\n" + logEl.textContent;
@@ -32,41 +28,21 @@ const setStatus = (text) => {
 
 const normalizeAppId = (value) => value.replace(/^\/+|\/+$/g, "");
 
-const ensureEndpointIdFormat = (id) => {
-  const parts = id.split("/");
-  if (parts.length >= 3) {
-    return id;
-  }
-  throw new Error(`Invalid endpoint: ${id}. Use <appOwner>/<appId>/webrtc.`);
-};
-
-const parseEndpointId = (id) => {
-  const normalizedId = ensureEndpointIdFormat(id);
-  const parts = normalizedId.split("/");
-  return {
-    owner: parts[0],
-    alias: parts[1],
-    path: parts.slice(2).join("/") || undefined,
-  };
-};
-
 const buildWsUrl = (appId, token) => {
   const normalizedAppId = normalizeAppId(appId);
   return `wss://fal.run/${normalizedAppId}?fal_jwt_token=${encodeURIComponent(token)}`;
 };
 
-const getTemporaryAuthToken = async (appId, apiKey) => {
-  const { alias } = parseEndpointId(appId);
-  const response = await fetch("https://rest.alpha.fal.ai/tokens/", {
+const getTemporaryAuthToken = async (appId) => {
+  const response = await fetch("/fal/token", {
     method: "POST",
     headers: {
-      Authorization: `Key ${apiKey}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
     body: JSON.stringify({
-      allowed_apps: [alias],
-      token_expiration: TOKEN_EXPIRATION_SECONDS,
+      appId,
+      tokenExpirationSeconds: TOKEN_EXPIRATION_SECONDS,
     }),
   });
 
@@ -111,16 +87,14 @@ const ensurePeer = async () => {
 
   pc.onicecandidate = (event) => {
     if (event.candidate && ws) {
-      ws.send(
-        JSON.stringify({
-          type: "icecandidate",
-          candidate: {
-            candidate: event.candidate.candidate,
-            sdpMid: event.candidate.sdpMid,
-            sdpMLineIndex: event.candidate.sdpMLineIndex,
-          },
-        }),
-      );
+      sendWs({
+        type: "icecandidate",
+        candidate: {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        },
+      });
     }
   };
 
@@ -138,7 +112,35 @@ const ensurePeer = async () => {
 const sendOffer = async () => {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  ws?.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+  sendWs({ type: "offer", sdp: offer.sdp });
+};
+
+const sendWs = (payload) => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const encoded = encode(payload);
+  const buffer = encoded.buffer.slice(
+    encoded.byteOffset,
+    encoded.byteOffset + encoded.byteLength,
+  );
+  ws.send(buffer);
+};
+
+const readWsMessage = async (data) => {
+  if (data instanceof ArrayBuffer) {
+    return decode(new Uint8Array(data));
+  }
+  if (data instanceof Blob) {
+    const buffer = await data.arrayBuffer();
+    return decode(new Uint8Array(buffer));
+  }
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data);
+    } catch {
+      return data;
+    }
+  }
+  return data;
 };
 
 startBtn.addEventListener("click", async () => {
@@ -149,9 +151,8 @@ startBtn.addEventListener("click", async () => {
   logEl.textContent = "";
 
   const appId = normalizeAppId(appIdInput.value.trim());
-  const apiKey = apiKeyInput.value.trim();
-  if (!appId || !apiKey) {
-    log("Missing endpoint or API key.");
+  if (!appId) {
+    log("Missing endpoint.");
     stop();
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -160,7 +161,7 @@ startBtn.addEventListener("click", async () => {
   }
 
   try {
-    authToken = await getTemporaryAuthToken(appId, apiKey);
+    authToken = await getTemporaryAuthToken(appId);
   } catch (err) {
     log(`Failed to fetch token: ${err.message || err}`);
     stop();
@@ -172,6 +173,7 @@ startBtn.addEventListener("click", async () => {
 
   const wsUrl = buildWsUrl(appId, authToken);
   ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
 
   ws.onopen = async () => {
     setStatus("Connected");
@@ -183,11 +185,9 @@ startBtn.addEventListener("click", async () => {
   };
 
   ws.onmessage = async (event) => {
-    let msg = null;
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      log(`WS: ${event.data}`);
+    const msg = await readWsMessage(event.data);
+    if (!msg || typeof msg !== "object") {
+      log(`WS: ${String(msg)}`);
       return;
     }
 
@@ -212,7 +212,7 @@ startBtn.addEventListener("click", async () => {
       paused = msg.paused;
       pauseBtn.textContent = paused ? "Resume (Space)" : "Pause (Space)";
     } else {
-      log(`WS message: ${event.data}`);
+      log(`WS message: ${JSON.stringify(msg)}`);
     }
   };
 
@@ -244,7 +244,7 @@ stopBtn.addEventListener("click", () => {
 const togglePause = () => {
   if (!ws) return;
   paused = !paused;
-  ws.send(JSON.stringify({ type: "pause", paused }));
+  sendWs({ type: "pause", paused });
   pauseBtn.textContent = paused ? "Resume (Space)" : "Pause (Space)";
 };
 
@@ -254,7 +254,7 @@ const sendActionValue = (actionValue) => {
   if (!ws) return;
   if (paused) return;
   const payload = { type: "action", action: actionValue };
-  ws.send(JSON.stringify(payload));
+  sendWs(payload);
 };
 
 const sendMove = (move) => {
