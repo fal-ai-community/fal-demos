@@ -1,6 +1,8 @@
+from contextlib import suppress
+from typing import AsyncIterator
+
 import fal
 from fal.toolkit import clone_repository
-from fastapi import WebSocket
 
 
 class MatrixGame2(fal.App):
@@ -174,18 +176,12 @@ class MatrixGame2(fal.App):
                 self._last_seed[self._default_mode] = seed_key
         return session
 
-    @fal.endpoint("/webrtc", is_websocket=True)
-    async def webrtc(self, ws: WebSocket):
+    @fal.realtime("/webrtc")
+    async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
         import asyncio
-        import json
         from av import VideoFrame
         from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
         from aiortc.sdp import candidate_from_sdp
-        from starlette.websockets import WebSocketDisconnect, WebSocketState
-
-        await ws.accept()
-        print("WebRTC: websocket accepted")
-        await ws.send_json({"type": "ready"})
 
         session = await asyncio.to_thread(self._prepare_session, True)
         stream_holder = {"stream": None}
@@ -232,36 +228,32 @@ class MatrixGame2(fal.App):
                 return frame
 
         pc = RTCPeerConnection()
-        frame_queue = asyncio.Queue(maxsize=24)
+        frame_queue: asyncio.Queue[VideoFrame] = asyncio.Queue(maxsize=24)
         ready_for_frames = asyncio.Event()
         stop_event = asyncio.Event()
         resume_event = asyncio.Event()
         resume_event.set()
         first_frame_logged = False
+        outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
 
-        async def safe_send_json(payload):
-            try:
-                if (
-                    ws.client_state != WebSocketState.CONNECTED
-                    or ws.application_state != WebSocketState.CONNECTED
-                ):
-                    return
-                await ws.send_json(payload)
-            except (RuntimeError, WebSocketDisconnect):
-                pass
+        async def send(payload: dict) -> None:
+            if stop_event.is_set():
+                return
+            await outgoing.put(payload)
 
         async def send_error(prefix, exc):
-            await safe_send_json(
+            await send(
                 {"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"}
             )
             stop_event.set()
+            await outgoing.put(None)
 
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate is None:
-                await safe_send_json({"type": "icecandidate", "candidate": None})
+                await send({"type": "icecandidate", "candidate": None})
                 return
-            await safe_send_json(
+            await send(
                 {
                     "type": "icecandidate",
                     "candidate": {
@@ -277,6 +269,7 @@ class MatrixGame2(fal.App):
             print(f"WebRTC: connection state {pc.connectionState}")
             if pc.connectionState in ("failed", "closed", "disconnected"):
                 stop_event.set()
+                await outgoing.put(None)
 
         pc.addTrack(BlockVideoTrack(frame_queue))
 
@@ -303,8 +296,9 @@ class MatrixGame2(fal.App):
                     await send_error("frame_failed", exc)
                     break
                 if block is None:
-                    await safe_send_json({"type": "stream_exhausted"})
+                    await send({"type": "stream_exhausted"})
                     stop_event.set()
+                    await outgoing.put(None)
                     break
 
                 for frame in block:
@@ -314,7 +308,7 @@ class MatrixGame2(fal.App):
                         print("WebRTC: enqueued first video frame")
                         first_frame_logged = True
 
-        action_queue = asyncio.Queue()
+        action_queue: asyncio.Queue[object] = asyncio.Queue()
         producer_task = asyncio.create_task(frame_producer())
 
         async def handle_offer(payload):
@@ -325,7 +319,7 @@ class MatrixGame2(fal.App):
                 await pc.setRemoteDescription(offer)
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
-                await safe_send_json({"type": "answer", "sdp": pc.localDescription.sdp})
+                await send({"type": "answer", "sdp": pc.localDescription.sdp})
                 ready_for_frames.set()
                 return True
             except Exception as exc:
@@ -359,7 +353,7 @@ class MatrixGame2(fal.App):
                 resume_event.clear()
             else:
                 resume_event.set()
-            await safe_send_json({"type": "pause", "paused": not resume_event.is_set()})
+            await send({"type": "pause", "paused": not resume_event.is_set()})
             return True
 
         async def handle_payload(payload):
@@ -377,28 +371,35 @@ class MatrixGame2(fal.App):
             await action_queue.put(payload)
             return True
 
-        async def receive_payload():
+        async def input_loop() -> None:
             try:
-                message = await ws.receive_text()
-            except RuntimeError:
-                return None
-            try:
-                return json.loads(message)
-            except json.JSONDecodeError:
-                return message
+                async for payload in inputs:
+                    if stop_event.is_set():
+                        break
+                    should_continue = await handle_payload(payload)
+                    if not should_continue:
+                        break
+            finally:
+                stop_event.set()
+                await outgoing.put(None)
 
+        input_task: asyncio.Task | None = None
         try:
+            await outgoing.put({"type": "ready"})
+            input_task = asyncio.create_task(input_loop())
             while True:
-                payload = await receive_payload()
+                payload = await outgoing.get()
                 if payload is None:
                     break
-                should_continue = await handle_payload(payload)
-                if not should_continue:
-                    break
-        except WebSocketDisconnect:
-            pass
+                yield payload
         finally:
-            print("WebRTC: websocket closing")
+            print("WebRTC: session closing")
             stop_event.set()
+            if input_task is not None:
+                input_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await input_task
             producer_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer_task
             await pc.close()
