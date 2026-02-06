@@ -44,7 +44,7 @@ class TextToMusicInput(BaseModel):
 """,
         ],
         ui={
-            "field": "textarea", # Set the input field to textarea for better user experience
+            "field": "textarea",  # Set the input field to textarea for better user experience
         },
     )
     reference_audio_url: str = Field(
@@ -54,7 +54,9 @@ class TextToMusicInput(BaseModel):
         examples=[
             "https://storage.googleapis.com/falserverless/model_tests/diffrythm/rock_en.wav",
         ],
-        ui={"important": True}, # Mark as important to not list it in the advanced options section
+        ui={
+            "important": True
+        },  # Mark as important to not list it in the advanced options section
     )
     style_prompt: str = Field(
         title="Style Prompt",
@@ -144,6 +146,7 @@ def extract_segments(text):
 
     return result
 
+
 # Custom Docker Image to install apt packages like espeak-ng
 DOCKER_STRING = """
 FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
@@ -199,11 +202,12 @@ class DiffRhythm(fal.App):
     min_concurrency = 1
     max_concurrency = 2
     app_name = "diffrhythm"
-    image = fal.ContainerImage.from_dockerfile_str(DOCKER_STRING)  # Use the custom Docker image
+    image = fal.ContainerImage.from_dockerfile_str(
+        DOCKER_STRING
+    )  # Use the custom Docker image
     machine_type = "GPU-H100"
 
     def setup(self):
-        import numpy as np
         import torch
 
         # Clone the DiffRhythm repository
@@ -226,7 +230,7 @@ class DiffRhythm(fal.App):
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/diffrhythm/g2p/sources/g2p_chinese_model/poly_bert_model.onnx",
             target_dir=f"{repo_path}/diffrhythm/g2p/sources/g2p_chinese_model",
         )
-        
+
         # Download eval model files required by prepare_model
         download_file(
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/pretrained/eval.yaml",
@@ -236,13 +240,13 @@ class DiffRhythm(fal.App):
             "https://huggingface.co/spaces/ASLP-lab/DiffRhythm/resolve/main/pretrained/eval.safetensors",
             target_dir=f"{repo_path}/pretrained",
         )
-        
+
         from diffrhythm.infer.infer_utils import prepare_model
 
         device = "cuda"
         # Load model with max_frames=6144 (supports both 95s and 285s durations)
-        self.cfm, self.tokenizer, self.muq, self.vae, self.eval_model, self.eval_muq = prepare_model(
-            max_frames=6144, device=device
+        self.cfm, self.tokenizer, self.muq, self.vae, self.eval_model, self.eval_muq = (
+            prepare_model(max_frames=6144, device=device)
         )
         # Compile the model for better performance
         self.cfm = torch.compile(self.cfm)
@@ -316,7 +320,7 @@ class DiffRhythm(fal.App):
                     style_prompt, vocal_flag = get_audio_style_prompt(
                         self.muq, ref_audio_path
                     )
-                except Exception as e:
+                except Exception:
                     raise FieldException(
                         "reference_audio_url",
                         "The reference audio could not be processed.",
@@ -324,17 +328,23 @@ class DiffRhythm(fal.App):
             else:
                 try:
                     style_prompt = get_text_style_prompt(self.muq, input.style_prompt)
-                except Exception as e:
+                except Exception:
                     raise FieldException(
                         "style_prompt", "The style prompt could not be processed."
                     )
-            
+
             # Import and call get_negative_style_prompt
             from diffrhythm.infer.infer_utils import get_negative_style_prompt
+
             negative_style_prompt = get_negative_style_prompt("cuda")
 
             latent_prompt, pred_frames = get_reference_latent(
-                "cuda", max_frames, edit=False, pred_segments=None, ref_song=ref_audio_path, vae_model=self.vae
+                "cuda",
+                max_frames,
+                edit=False,
+                pred_segments=None,
+                ref_song=ref_audio_path,
+                vae_model=self.vae,
             )
             batch_infer_num = 3  # Number of songs to generate for selection
             # inference returns (sample_rate, audio_array) when file_type='wav'

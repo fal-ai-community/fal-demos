@@ -18,7 +18,7 @@ class WebcamWebRtc(fal.App):
 
     def setup(self):
         from ultralytics import YOLO
-    
+
         model_path = "/data/yolov8n.pt"
         self.yolo_model = YOLO(model_path)
 

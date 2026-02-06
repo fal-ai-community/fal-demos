@@ -36,45 +36,49 @@ class FluxLoRATrainingWorker(DistributedWorker):
         from peft import LoraConfig
 
         self.rank_print(f"Loading Flux model on {self.device}")
-        
+
         # Load the transformer model
         self.transformer = FluxTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,
         ).to(self.device)
-        
+
         # Configure LoRA targeting all blocks (both double and single stream)
-        
+
         target_modules = []
-        
+
         # Double stream blocks (19 blocks) - these handle text-image interaction
         for block_num in range(19):
-            target_modules.extend([
-                f"transformer_blocks.{block_num}.attn.to_q",
-                f"transformer_blocks.{block_num}.attn.to_k",
-                f"transformer_blocks.{block_num}.attn.to_v",
-                f"transformer_blocks.{block_num}.attn.to_out.0",
-                f"transformer_blocks.{block_num}.attn.add_q_proj",
-                f"transformer_blocks.{block_num}.attn.add_k_proj",
-                f"transformer_blocks.{block_num}.attn.add_v_proj",
-                f"transformer_blocks.{block_num}.attn.to_add_out",
-                f"transformer_blocks.{block_num}.ff.net.0.proj",
-                f"transformer_blocks.{block_num}.ff.net.2",
-                f"transformer_blocks.{block_num}.ff_context.net.0.proj",
-                f"transformer_blocks.{block_num}.ff_context.net.2",
-            ])
-        
+            target_modules.extend(
+                [
+                    f"transformer_blocks.{block_num}.attn.to_q",
+                    f"transformer_blocks.{block_num}.attn.to_k",
+                    f"transformer_blocks.{block_num}.attn.to_v",
+                    f"transformer_blocks.{block_num}.attn.to_out.0",
+                    f"transformer_blocks.{block_num}.attn.add_q_proj",
+                    f"transformer_blocks.{block_num}.attn.add_k_proj",
+                    f"transformer_blocks.{block_num}.attn.add_v_proj",
+                    f"transformer_blocks.{block_num}.attn.to_add_out",
+                    f"transformer_blocks.{block_num}.ff.net.0.proj",
+                    f"transformer_blocks.{block_num}.ff.net.2",
+                    f"transformer_blocks.{block_num}.ff_context.net.0.proj",
+                    f"transformer_blocks.{block_num}.ff_context.net.2",
+                ]
+            )
+
         # Single stream blocks (38 blocks) - CRITICAL for image generation
         for block_num in range(38):
-            target_modules.extend([
-                f"single_transformer_blocks.{block_num}.attn.to_q",
-                f"single_transformer_blocks.{block_num}.attn.to_k",
-                f"single_transformer_blocks.{block_num}.attn.to_v",
-                f"single_transformer_blocks.{block_num}.proj_mlp",
-                f"single_transformer_blocks.{block_num}.proj_out",
-            ])
-        
+            target_modules.extend(
+                [
+                    f"single_transformer_blocks.{block_num}.attn.to_q",
+                    f"single_transformer_blocks.{block_num}.attn.to_k",
+                    f"single_transformer_blocks.{block_num}.attn.to_v",
+                    f"single_transformer_blocks.{block_num}.proj_mlp",
+                    f"single_transformer_blocks.{block_num}.proj_out",
+                ]
+            )
+
         lora_config = LoraConfig(
             r=16,  # rank
             lora_alpha=16,
@@ -83,10 +87,10 @@ class FluxLoRATrainingWorker(DistributedWorker):
             bias="none",
             init_lora_weights="gaussian",
         )
-        
+
         # Add LoRA adapters
         self.transformer.add_adapter(lora_config)
-        
+
         # Freeze base model, only train LoRA
         self.transformer.requires_grad_(False)
         for name, param in self.transformer.named_parameters():
@@ -97,7 +101,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
                     nn.init.normal_(param, mean=0.0, std=1.0 / 16)
                 elif "lora_B" in name:
                     nn.init.zeros_(param)
-        
+
         # Wrap with DDP for synchronized training
         self.transformer = DDP(
             self.transformer,
@@ -105,7 +109,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             output_device=self.rank,
             find_unused_parameters=False,
         )
-        
+
         self.rank_print("Model loaded and wrapped with DDP")
 
     def compute_flux_loss(
@@ -122,7 +126,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
     ) -> torch.Tensor:
         """
         Compute proper Flux flow matching loss.
-        
+
         This implements the rectified flow objective:
         - Sample noise
         - Interpolate between latents and noise using timestep
@@ -130,22 +134,29 @@ class FluxLoRATrainingWorker(DistributedWorker):
         - Compute MSE loss with optional masking
         """
         from diffusers import FluxPipeline
-        
+
         batch_size = latents.shape[0]
-        
+
         # Generate noise using generator for reproducibility
         if generator is not None and generator.device.type == "cpu":
-            noise = torch.randn(latents.shape, generator=generator, dtype=latents.dtype).to(latents.device)
+            noise = torch.randn(
+                latents.shape, generator=generator, dtype=latents.dtype
+            ).to(latents.device)
         elif generator is not None:
-            noise = torch.randn(latents.shape, generator=generator, dtype=latents.dtype, device=latents.device)
+            noise = torch.randn(
+                latents.shape,
+                generator=generator,
+                dtype=latents.dtype,
+                device=latents.device,
+            )
         else:
             noise = torch.randn_like(latents)
-        
+
         # Flow matching: interpolate between latents and noise
         # weight controls the interpolation (0 = latents, 1 = noise)
         weight = timesteps.view(-1, 1, 1, 1)
         noisy_latents = (1.0 - weight) * latents + weight * noise
-        
+
         # Pack latents (Flux-specific packing for efficient attention)
         packed_latents = FluxPipeline._pack_latents(
             noisy_latents,
@@ -154,7 +165,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
             height=latents.shape[2],
             width=latents.shape[3],
         )
-        
+
         # Forward pass through transformer
 
         model_pred = self.transformer(
@@ -165,9 +176,9 @@ class FluxLoRATrainingWorker(DistributedWorker):
             encoder_hidden_states=text_embeddings,
             txt_ids=text_ids,
             img_ids=img_ids,
-            return_dict=False
+            return_dict=False,
         )[0]
-        
+
         # Unpack predictions
         model_pred = FluxPipeline._unpack_latents(
             model_pred,
@@ -175,10 +186,10 @@ class FluxLoRATrainingWorker(DistributedWorker):
             width=int(latents.shape[3] * 8 // 2),
             vae_scale_factor=8,
         )
-        
+
         # Target is the velocity from latents to noise
         target = noise - latents
-        
+
         # Apply masks if provided (for inpainting)
         if masks is not None:
             target = masks.float() * target.float()
@@ -186,7 +197,7 @@ class FluxLoRATrainingWorker(DistributedWorker):
         else:
             target = target.float()
             model_pred = model_pred.float()
-        
+
         # Compute MSE loss
         loss = torch.nn.functional.mse_loss(model_pred, target)
         return loss
@@ -210,12 +221,14 @@ class FluxLoRATrainingWorker(DistributedWorker):
         """
         Production-ready training function with proper Flux training logic.
         """
-        self.rank_print(f"Starting training: lr={learning_rate}, steps={max_train_steps}")
-        
+        self.rank_print(
+            f"Starting training: lr={learning_rate}, steps={max_train_steps}"
+        )
+
         # Set seeds for reproducibility
         torch.manual_seed(seed + self.rank)
         torch.cuda.manual_seed(seed + self.rank)
-        
+
         # Step 1: Load training data (only rank 0)
         if self.rank == 0:
             self.rank_print(f"Loading training data from {training_data_path}")
@@ -231,14 +244,14 @@ class FluxLoRATrainingWorker(DistributedWorker):
             pooled_embeddings = torch.empty(0)
             text_ids = torch.empty(0, dtype=torch.long)
             masks = torch.empty(0)
-        
+
         # Step 2: Broadcast data to all ranks
         # IMPORTANT: Set correct CUDA device before broadcast to avoid device mismatch
         torch.cuda.set_device(self.device)
         objects = [latents, text_embeddings, pooled_embeddings, text_ids, masks]
         dist.broadcast_object_list(objects, src=0)
         latents, text_embeddings, pooled_embeddings, text_ids, masks = objects
-        
+
         # Move to GPU
         latents = latents.to(self.device, dtype=torch.bfloat16)
         text_embeddings = text_embeddings.to(self.device, dtype=torch.bfloat16)
@@ -248,20 +261,22 @@ class FluxLoRATrainingWorker(DistributedWorker):
             masks = masks.to(self.device, dtype=torch.bfloat16)
         else:
             masks = None
-        
+
         num_samples = latents.shape[0]
         self.rank_print(f"Loaded {num_samples} training samples")
-        self.rank_print(f"Data shapes: latents={latents.shape}, text_emb={text_embeddings.shape}, pooled={pooled_embeddings.shape}, text_ids={text_ids.shape}")
-        
+        self.rank_print(
+            f"Data shapes: latents={latents.shape}, text_emb={text_embeddings.shape}, pooled={pooled_embeddings.shape}, text_ids={text_ids.shape}"
+        )
+
         # Step 3: Prepare image IDs using FluxPipeline's method for consistency
         # This creates properly formatted position IDs for the packed latents
         from diffusers import FluxPipeline
-        
+
         # Note: latents are 64x64, Flux packs to 32x32
         # FluxPipeline._prepare_latent_image_ids expects unpacked dimensions
         latent_height = latents.shape[2]
         latent_width = latents.shape[3]
-        
+
         # Create template image IDs (will be expanded per batch)
         img_ids_template = FluxPipeline._prepare_latent_image_ids(
             batch_size=1,
@@ -272,85 +287,105 @@ class FluxLoRATrainingWorker(DistributedWorker):
         )
         # Shape: [1, H*W/4, 3] (already packed by _prepare_latent_image_ids)
         img_ids = img_ids_template.squeeze(0)  # Remove batch dim: [H*W/4, 3]
-        
+
         # Step 4: Set up optimizer with DUAL learning rates for lora_A and lora_B
         params_A = []
         params_B = []
-        
+
         # Get the underlying module from DDP
         model = self.transformer.module
-        
+
         for name, param in model.named_parameters():
             if param.requires_grad:
                 if "lora_A" in name:
                     params_A.append(param)
                 elif "lora_B" in name:
                     params_B.append(param)
-        
+
         # Create optimizer with different LRs
         # Reference implementation uses weight_decay=0.1
-        optimizer = torch.optim.AdamW([
-            {"params": params_A, "lr": learning_rate, "weight_decay": 0.1},
-            {"params": params_B, "lr": learning_rate * b_up_factor, "weight_decay": 0.1},
-        ], betas=(0.9, 0.999), eps=1e-8)
-        
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": params_A, "lr": learning_rate, "weight_decay": 0.1},
+                {
+                    "params": params_B,
+                    "lr": learning_rate * b_up_factor,
+                    "weight_decay": 0.1,
+                },
+            ],
+            betas=(0.9, 0.999),
+            eps=1e-8,
+        )
+
         # Step 5: Set up learning rate scheduler
         from diffusers.optimization import get_scheduler as get_diffusers_scheduler
-        
+
         lr_scheduler_obj = get_diffusers_scheduler(
             lr_scheduler,
             optimizer=optimizer,
             num_warmup_steps=lr_warmup_steps,
             num_training_steps=max_train_steps,
         )
-        
+
         # Step 6: Set up random generators
         # GPU generator for noise (faster), CPU generator for timesteps (deterministic)
-        gpu_generator = torch.Generator(device=self.device).manual_seed(seed + self.rank)
-        cpu_generator = torch.Generator(device='cpu').manual_seed(seed)
-        
+        gpu_generator = torch.Generator(device=self.device).manual_seed(
+            seed + self.rank
+        )
+        cpu_generator = torch.Generator(device="cpu").manual_seed(seed)
+
         # Step 7: Set up timestep sampling using sigmoid normal distribution
         # Sample from normal(0.5, 0.25) then apply sigmoid
         # This focuses sampling on middle timesteps for better training stability
         def get_timesteps():
             n = torch.normal(0.5, 0.25, (batch_size,), generator=cpu_generator)
             return torch.sigmoid(n)
-        
+
         # Step 8: Training loop
         self.transformer.train()
         total_loss = 0.0
-        
+
         for step in range(max_train_steps):
             # Sample batch (each GPU gets different indices)
-            batch_indices = torch.randperm(num_samples, device="cpu")[:batch_size * self.world_size]
-            local_indices = batch_indices[self.rank * batch_size:(self.rank + 1) * batch_size]
-            
+            batch_indices = torch.randperm(num_samples, device="cpu")[
+                : batch_size * self.world_size
+            ]
+            local_indices = batch_indices[
+                self.rank * batch_size : (self.rank + 1) * batch_size
+            ]
+
             if len(local_indices) < batch_size:
                 # Pad if needed
-                local_indices = torch.cat([
-                    local_indices,
-                    torch.randint(0, num_samples, (batch_size - len(local_indices),))
-                ])
-            
+                local_indices = torch.cat(
+                    [
+                        local_indices,
+                        torch.randint(
+                            0, num_samples, (batch_size - len(local_indices),)
+                        ),
+                    ]
+                )
+
             # Get batch
             batch_latents = latents[local_indices]
             batch_text_emb = text_embeddings[local_indices]
             batch_pooled_emb = pooled_embeddings[local_indices]
             batch_masks = masks[local_indices] if masks is not None else None
-            
+
             # Sample timesteps (already in [0, 1] range from get_timesteps)
             timesteps = get_timesteps()
             timesteps = timesteps.to(self.device, dtype=torch.bfloat16)
-            
+
             # Guidance
-            guidance = torch.full((batch_size,), guidance_scale, device=self.device, dtype=torch.bfloat16)
-            
+            guidance = torch.full(
+                (batch_size,), guidance_scale, device=self.device, dtype=torch.bfloat16
+            )
+
             # Expand text_ids to batch size: [1, 512, 3] -> [batch_size, 512, 3]
             batch_text_ids = text_ids.expand(batch_size, -1, -1)
-            
+
             # Expand img_ids to batch size: [H*W, 3] -> [batch_size, H*W, 3]
             batch_img_ids = img_ids.unsqueeze(0).expand(batch_size, -1, -1)
-            
+
             # Compute loss
             loss = self.compute_flux_loss(
                 latents=batch_latents,
@@ -363,57 +398,60 @@ class FluxLoRATrainingWorker(DistributedWorker):
                 masks=batch_masks,
                 generator=gpu_generator,
             )
-            
+
             # Backward pass with gradient accumulation
             loss = loss / gradient_accumulation_steps
             loss.backward()
-            
+
             # Update weights
             if (step + 1) % gradient_accumulation_steps == 0:
                 optimizer.step()
                 lr_scheduler_obj.step()
                 optimizer.zero_grad()
-            
+
             total_loss += loss.item() * gradient_accumulation_steps
-            
+
             # Stream progress (only rank 0)
             if streaming and self.rank == 0 and step % 10 == 0:
                 avg_loss = total_loss / (step + 1)
-                current_lr = optimizer.param_groups[0]['lr']
-                self.add_streaming_result({
-                    "step": step,
-                    "loss": loss.item() * gradient_accumulation_steps,
-                    "avg_loss": avg_loss,
-                    "learning_rate": current_lr,
-                    "progress": f"{step}/{max_train_steps}",
-                }, as_text_event=True)
-            
+                current_lr = optimizer.param_groups[0]["lr"]
+                self.add_streaming_result(
+                    {
+                        "step": step,
+                        "loss": loss.item() * gradient_accumulation_steps,
+                        "avg_loss": avg_loss,
+                        "learning_rate": current_lr,
+                        "progress": f"{step}/{max_train_steps}",
+                    },
+                    as_text_event=True,
+                )
+
             # Print progress
             if step % 20 == 0:
                 avg_loss = total_loss / (step + 1)
-                self.rank_print(f"Step {step}/{max_train_steps}, Loss: {loss.item() * gradient_accumulation_steps:.6f}, Avg: {avg_loss:.6f}")
-            
+                self.rank_print(
+                    f"Step {step}/{max_train_steps}, Loss: {loss.item() * gradient_accumulation_steps:.6f}, Avg: {avg_loss:.6f}"
+                )
 
-        
         # Final average loss
         avg_loss = total_loss / max_train_steps
         self.rank_print(f"Training complete! Average loss: {avg_loss:.6f}")
-        
+
         # Step 9: Save checkpoint (only rank 0)
         if self.rank == 0:
             self.rank_print("Saving checkpoint...")
-            
+
             # Extract LoRA weights using proper Flux pipeline format
             from peft import get_peft_model_state_dict
             from diffusers import FluxPipeline
             import shutil
-            
+
             # Get the underlying module from DDP
             model_to_save = self.transformer.module
-            
+
             # Extract only LoRA parameters
             lora_state_dict = get_peft_model_state_dict(model_to_save)
-            
+
             # Create temporary directory for proper LoRA format
             # FluxPipeline.save_lora_weights creates the correct format for loading
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -423,29 +461,26 @@ class FluxLoRATrainingWorker(DistributedWorker):
                     transformer_lora_layers=lora_state_dict,
                     text_encoder_lora_layers=None,
                 )
-                
+
                 # The saved file will be pytorch_lora_weights.safetensors
                 source_path = Path(temp_dir) / "pytorch_lora_weights.safetensors"
-                
+
                 # Copy to a permanent location
                 with tempfile.NamedTemporaryFile(
-                    mode='wb',
-                    suffix='.safetensors',
-                    delete=False,
-                    dir='/tmp'
+                    mode="wb", suffix=".safetensors", delete=False, dir="/tmp"
                 ) as f:
                     checkpoint_path = f.name
-                
+
                 shutil.copy(source_path, checkpoint_path)
-            
+
             file_size = Path(checkpoint_path).stat().st_size / (1024 * 1024)
             self.rank_print(f"Checkpoint saved: {checkpoint_path} ({file_size:.2f} MB)")
-            
+
             return {
                 "checkpoint_path": checkpoint_path,
                 "final_loss": avg_loss,
                 "num_steps": max_train_steps,
             }
-        
+
         # Other ranks return empty dict
         return {}
