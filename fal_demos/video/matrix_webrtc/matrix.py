@@ -62,7 +62,9 @@ class MatrixGame2(fal.App):
 
         sys.path.insert(0, str(self._repo_path / "Matrix-Game-2"))
         os.chdir(self._repo_path / "Matrix-Game-2")
-        os.system("huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir /data/Matrix-Game-2.0")
+        os.system(
+            "huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir /data/Matrix-Game-2.0"
+        )
 
         self._default_mode = "universal"
         self._mode_seed_dirs = {
@@ -71,7 +73,9 @@ class MatrixGame2(fal.App):
             "templerun": "temple_run",
         }
         seed_dir = self._mode_seed_dirs.get(self._default_mode, "universal")
-        self._default_seed_path = self._repo_path / f"Matrix-Game-2/demo_images/{seed_dir}/0001.png"
+        self._default_seed_path = (
+            self._repo_path / f"Matrix-Game-2/demo_images/{seed_dir}/0001.png"
+        )
         self._session_lock = threading.RLock()
         self._sessions = {
             self._default_mode: self._build_session(self._default_mode),
@@ -80,6 +84,7 @@ class MatrixGame2(fal.App):
 
         session = self._prepare_session(True)
         with self._session_lock:
+
             def action_provider(current_start_frame, num_frame_per_block, action_mode):
                 return "q u"
 
@@ -105,8 +110,10 @@ class MatrixGame2(fal.App):
         config_path = config_map.get(mode, config_map["universal"])
         sys.argv = [
             "matrix_game2_app.py",
-            "--config", config_path,
-            "--pretrained_model_path", "/data/Matrix-Game-2.0",
+            "--config",
+            config_path,
+            "--pretrained_model_path",
+            "/data/Matrix-Game-2.0",
         ]
         args = parse_args()
         if not args.checkpoint_path:
@@ -125,7 +132,9 @@ class MatrixGame2(fal.App):
                 )
             elif config_name == "inference_gta_drive.yaml":
                 gta_candidates = glob.glob(
-                    os.path.join(args.pretrained_model_path, "**", "*gta*/*.safetensors"),
+                    os.path.join(
+                        args.pretrained_model_path, "**", "*gta*/*.safetensors"
+                    ),
                     recursive=True,
                 )
                 if gta_candidates:
@@ -153,10 +162,14 @@ class MatrixGame2(fal.App):
         with self._session_lock:
             session = self._sessions.get(self._default_mode)
             if session is None:
-                raise ValueError(f"Mode {self._default_mode} is not loaded in this deployment.")
+                raise ValueError(
+                    f"Mode {self._default_mode} is not loaded in this deployment."
+                )
             if force:
                 self._last_seed[self._default_mode] = None
-            if self._last_seed.get(self._default_mode) != seed_key or not getattr(session, "_prepared", False):
+            if self._last_seed.get(self._default_mode) != seed_key or not getattr(
+                session, "_prepared", False
+            ):
                 session.prepare(seed_image, mode=self._default_mode)
                 self._last_seed[self._default_mode] = seed_key
         return session
@@ -238,7 +251,9 @@ class MatrixGame2(fal.App):
                 pass
 
         async def send_error(prefix, exc):
-            await safe_send_json({"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"})
+            await safe_send_json(
+                {"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"}
+            )
             stop_event.set()
 
         @pc.on("icecandidate")

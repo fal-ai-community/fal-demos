@@ -181,9 +181,7 @@ class Input(BaseModel):
 
 class Output(BaseModel):
     lora_file: File = Field(description="Trained LoRA weights.")
-    config_file: File = Field(
-        description="Config to help set up inference endpoints."
-    )
+    config_file: File = Field(description="Config to help set up inference endpoints.")
 
 
 def ensure_nvcc_executable() -> None:
@@ -517,11 +515,12 @@ def prepare_dataset_files(
         with open(target_caption_path, "w") as fp:
             fp.write(caption)
 
-        if (
-            fit_videos
-            and os.path.splitext(media_file)[1].lower()
-            in [".mp4", ".mov", ".avi", ".mkv"]
-        ):
+        if fit_videos and os.path.splitext(media_file)[1].lower() in [
+            ".mp4",
+            ".mov",
+            ".avi",
+            ".mkv",
+        ]:
             fit_to_frame_count_fps(
                 target_path, target_path, target_frames=81, target_fps=16
             )
@@ -610,7 +609,9 @@ def train(
     """
     copy_files = True
 
-    if dataset_directory_archive_or_url.startswith("http://") or dataset_directory_archive_or_url.startswith("https://"):
+    if dataset_directory_archive_or_url.startswith(
+        "http://"
+    ) or dataset_directory_archive_or_url.startswith("https://"):
         copy_files = False
         dataset_directory_archive_or_url = download_dataset(
             dataset_directory_archive_or_url

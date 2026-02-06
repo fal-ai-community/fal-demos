@@ -84,7 +84,11 @@ class BrEnglishRequest(BaseModel):
 
 
 class JapaneseRequest(BaseModel):
-    prompt: str = Field(examples=["夢を追いかけることを恐れないでください。努力すれば、必ず道は開けます！"])
+    prompt: str = Field(
+        examples=[
+            "夢を追いかけることを恐れないでください。努力すれば、必ず道は開けます！"
+        ]
+    )
     voice: Literal[
         "jf_alpha",
         "jf_gongitsune",

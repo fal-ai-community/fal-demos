@@ -9,6 +9,7 @@ from fastapi import Response
 from pydantic import Field, BaseModel
 from fal_demos.image.common import Output
 
+
 # The input model for the inference request, make sure to set the title and description for each field
 # and set the examples for the fields that are not optional
 class BaseInput(BaseModel):
@@ -39,7 +40,7 @@ class BaseInput(BaseModel):
     num_inference_steps: int = Field(
         default=18,
         description="The number of inference steps to perform.",
-        # set the least and max values whenver possible to limit the input values
+        # set the least and max values whenever possible to limit the input values
         ge=1,
         le=50,
     )
@@ -75,9 +76,11 @@ class BaseInput(BaseModel):
         description="The format of the generated image.",
     )
 
+
 # For the base endpoint
 class TextToImageInput(BaseInput):
     pass
+
 
 # For the sprint endpoint, we can reuse the base input model and override the fields that we want to change
 class SprintInput(BaseInput):
@@ -105,6 +108,7 @@ class SanaOutput(Output):
         ],
     )
 
+
 class SanaSprintOutput(Output):
     images: list[Image] = Field(
         description="The generated image files info.",
@@ -124,14 +128,15 @@ class SanaSprintOutput(Output):
 
 class Sana(
     fal.App,
-    keep_alive=600, # The worker will be kept alive for 10 minutes after the last request
-    min_concurrency=0, # The minimum number of concurrent workers to keep alive, if set to 0, the app will startup when the first request is received
-    max_concurrency=10, # The maximum number of concurrent workers to acquire, it helps limit the number of concurrent requests to the app
-    name="sana", # set the app name, the endpoint will be served at username/sana
-):  
+    keep_alive=600,  # The worker will be kept alive for 10 minutes after the last request
+    min_concurrency=0,  # The minimum number of concurrent workers to keep alive, if set to 0, the app will startup when the first request is received
+    max_concurrency=10,  # The maximum number of concurrent workers to acquire, it helps limit the number of concurrent requests to the app
+    name="sana",  # set the app name, the endpoint will be served at username/sana
+):
     """
     Specify requirements as follows and make sure to pin the versions of packages and commit hashes to ensure reliability.
     """
+
     requirements = [
         "torch==2.6.0",
         "accelerate==1.6.0",
@@ -146,13 +151,13 @@ class Sana(
     local_python_modules = [
         "fal_demos",
     ]
-    machine_type = "GPU-H100" # Choose machine type from https://docs.fal.ai/private-serverless-models/resources/
+    machine_type = "GPU-H100"  # Choose machine type from https://docs.fal.ai/private-serverless-models/resources/
 
     def setup(self):
         """
         This method is called once when the app is started. Use it to load your model and cache it for all requests.
         """
-        # Import the libraries inside the setup method since these are installed in the worker enviroment as set in the requirements
+        # Import the libraries inside the setup method since these are installed in the worker environment as set in the requirements
         import torch
         from diffusers import SanaPipeline, SanaSprintPipeline
 
@@ -165,7 +170,9 @@ class Sana(
 
         self.pipes["sprint"] = SanaSprintPipeline.from_pretrained(
             "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers",
-            text_encoder=self.pipes["base"].text_encoder, # Reuse the text encoder from the base pipeline
+            text_encoder=self.pipes[
+                "base"
+            ].text_encoder,  # Reuse the text encoder from the base pipeline
             torch_dtype=torch.bfloat16,
         ).to("cuda")
 
@@ -201,19 +208,17 @@ class Sana(
         if model_id == "sprint":
             # Negative prompt is not supported in the sprint pipeline
             model_input.pop("negative_prompt")
-        
 
         # Generate the images
         images = self.pipes[model_id](**model_input).images
 
-
         # Perform the safety check
         postprocessed_images = postprocess_images(
-                images,
-                input.enable_safety_checker,
-            )
+            images,
+            input.enable_safety_checker,
+        )
 
-        # Pricing 
+        # Pricing
         resolution_factor = math.ceil(
             (image_size.width * image_size.height) / (1024 * 1024)
         )
@@ -236,20 +241,23 @@ class Sana(
     @fal.endpoint("/")
     async def generate(
         self,
-        input: TextToImageInput, # This will be used to autgenerate the OpenAPI spec and the playground form
-        response: Response, # This is the response object that will be used to set the headers for setting the billing units
-    ) -> SanaOutput: # This is the output object that will be used to autgenerate the OpenAPI spec
+        input: TextToImageInput,  # This will be used to autgenerate the OpenAPI spec and the playground form
+        response: Response,  # This is the response object that will be used to set the headers for setting the billing units
+    ) -> (
+        SanaOutput
+    ):  # This is the output object that will be used to autgenerate the OpenAPI spec
         return await self._generate(input, response, "base")
 
     @fal.endpoint("/sprint")
     async def generate_sprint(
         self,
-        input: SprintInput, # Use a different input class for the sprint endpoint to change example values and remove the negative prompt
+        input: SprintInput,  # Use a different input class for the sprint endpoint to change example values and remove the negative prompt
         response: Response,
     ) -> SanaSprintOutput:
         return await self._generate(input, response, "sprint")
 
-# Run the app with fal run fal_demos/image/sana.py::Sana 
+
+# Run the app with fal run fal_demos/image/sana.py::Sana
 # or fal run sana (needs to be defined in the pyproject.toml inside the tool.fal.apps section)
 
 # The app will be served on an ephemeral URL, example: https://fal.ai/dashboard/sdk/fal-ai/9fe9b6fc-534d-4926-95b1-87b7f15a67de

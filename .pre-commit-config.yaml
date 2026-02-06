@@ -1,0 +1,43 @@
+default_language_version:
+  python: python3.11
+
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: 'v0.3.4'
+  hooks:
+  - id: ruff
+    args:
+    - --fix
+    - --exit-non-zero-on-fix
+    - --exclude=UP007
+    exclude: ".*(_pb2.py|_pb2.pyi|_pb2_grpc.py)$"
+  - id: ruff-format
+    exclude: ".*(_pb2.py|_pb2.pyi|_pb2_grpc.py)$"
+- repo: https://github.com/asottile/setup-cfg-fmt
+  rev: v1.20.1
+  hooks:
+  - id: setup-cfg-fmt
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.2.0
+  hooks:
+  - id: mypy
+    args:
+    - --ignore-missing-imports
+    - --no-warn-no-return
+    - --implicit-optional
+    - --allow-untyped-defs
+    - --allow-untyped-calls
+    - --allow-untyped-decorators
+    - --disable-error-code=call-arg
+    - --disable-error-code=attr-defined
+    - --disable-error-code=var-annotated
+    - --disable-error-code=arg-type
+    exclude: ".*(_pb2.py|_pb2.pyi|_pb2_grpc.py)$"
+    additional_dependencies: [types-protobuf]
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.1.0
+  hooks:
+  - id: codespell
+    args:
+    - --ignore-words-list=wan,Wan,WAN
+    exclude: ".*(_pb2.py|_pb2.pyi|_pb2_grpc.py)$"

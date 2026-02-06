@@ -69,7 +69,7 @@ class Hunyuan3D(
     name="hunyuan3d",
     min_concurrency=0,
     max_concurrency=1,
-    max_multiplexing=10, # Multiplexing allows multiple requests to be handled by the same worker at the same time.
+    max_multiplexing=10,  # Multiplexing allows multiple requests to be handled by the same worker at the same time.
 ):
     machine_type = "M"
     requirements = ["fal-client"]

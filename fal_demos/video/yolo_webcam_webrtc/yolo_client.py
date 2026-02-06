@@ -1,7 +1,5 @@
 import argparse
 import asyncio
-import os
-import platform
 from contextlib import suppress
 
 import fal_client
@@ -179,7 +177,9 @@ async def run_webrtc(
         def on_track(track):
             if track.kind == "video":
                 print("Remote video track received.")
-                asyncio.create_task(forward_remote_frames(track, remote_queue, stop_event))
+                asyncio.create_task(
+                    forward_remote_frames(track, remote_queue, stop_event)
+                )
 
         render_tasks = []
         if local_preview_queue is not None:
@@ -194,9 +194,7 @@ async def run_webrtc(
                 )
             )
         render_tasks.append(
-            asyncio.create_task(
-                render_frames("YOLO output", remote_queue, stop_event)
-            )
+            asyncio.create_task(render_frames("YOLO output", remote_queue, stop_event))
         )
 
         offer = await pc.createOffer()
@@ -265,7 +263,6 @@ def run(*args, **kwargs):
     print("Done")
 
 
-
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -315,6 +312,7 @@ def main():
         fps=args.fps,
         no_preview=args.no_preview,
     )
+
 
 if __name__ == "__main__":
     main()
