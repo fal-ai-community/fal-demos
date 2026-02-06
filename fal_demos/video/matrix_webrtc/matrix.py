@@ -22,7 +22,7 @@ class MatrixGame2(fal.App):
         "flask-socketio",
         "ftfy",
         "git+https://github.com/openai/CLIP.git",
-        "huggingface_hub[cli]",
+        "huggingface-hub[cli]",
         "imageio",
         "imageio-ffmpeg",
         "lmdb",
@@ -56,6 +56,7 @@ class MatrixGame2(fal.App):
         import os
         import sys
         import threading
+        import re
 
         self._repo_path = clone_repository(
             "https://github.com/efiop/Matrix-Game.git",
@@ -64,8 +65,28 @@ class MatrixGame2(fal.App):
 
         sys.path.insert(0, str(self._repo_path / "Matrix-Game-2"))
         os.chdir(self._repo_path / "Matrix-Game-2")
+
+        cache_version = os.getenv("MATRIX_CACHE_VERSION", "v1")
+        gpu_slug = "unknown"
+        try:
+            import torch
+
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_slug = (
+                re.sub(r"[^a-zA-Z0-9]+", "-", gpu_name.strip()).strip("-").lower()
+            )
+        except Exception:
+            pass
+        inductor_cache_dir = (
+            f"/data/inductor-cache/matrix-game-2/{gpu_slug}/{cache_version}"
+        )
+        triton_cache_dir = (
+            f"/data/triton-cache/matrix-game-2/{gpu_slug}/{cache_version}"
+        )
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", inductor_cache_dir)
+        os.environ.setdefault("TRITON_CACHE_DIR", triton_cache_dir)
         os.system(
-            "huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir /data/Matrix-Game-2.0"
+            "hf download Skywork/Matrix-Game-2.0 --local-dir /data/Matrix-Game-2.0"
         )
 
         self._default_mode = "universal"
