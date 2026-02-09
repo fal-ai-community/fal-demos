@@ -46,26 +46,26 @@ Open the Vite app in your browser and set Endpoint to:
 
 ## TURN / ICE configuration
 
-The server and Python client support three ICE modes (in this order):
+The backend sends ICE servers to clients over realtime signaling (`type: iceServers`).
+So clients do not need TURN credentials configured locally.
 
-1. Metered REST credentials (recommended)
-2. Static Metered username/password
-3. Public STUN fallback
+Server-side ICE mode priority:
+
+1. Metered secret key -> temporary API key -> credentials array (required)
 
 ### Metered REST mode (recommended)
 
-Set on both sides (server and client process):
+Set on the server:
 
 ```bash
-export METERED_TURN_CREDENTIALS_URL="https://<your-subdomain>.metered.live/api/v1/turn/credentials"
-export METERED_TURN_API_KEY="your_api_key"
+export METERED_TURN_SECRET_KEY="your_secret_key"
+export METERED_TURN_LABEL="your-subdomain"
 ```
 
-### Static Metered mode
+Notes:
 
-```bash
-export METERED_TURN_USERNAME="your_turn_username"
-export METERED_TURN_CREDENTIAL="your_turn_credential"
-```
+- `METERED_TURN_LABEL` is your Metered subdomain (for example `fal-demos`).
+- The credential request payload label and expiry are fixed in code.
 
-If none of the vars above are set, the app uses `stun:stun.l.google.com:19302`.
+The demo intentionally fails fast if required Metered secret env vars are
+missing, instead of silently falling back.

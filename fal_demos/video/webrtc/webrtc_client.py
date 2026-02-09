@@ -1,9 +1,5 @@
 import argparse
 import asyncio
-import json
-import os
-import urllib.parse
-import urllib.request
 from contextlib import suppress
 
 import fal_client
@@ -62,53 +58,26 @@ def decode_key(key_code: int) -> str | None:
     return None
 
 
-def build_ice_servers() -> list[RTCIceServer]:
-    api_key = os.getenv("METERED_TURN_API_KEY")
-    credentials_url = os.getenv("METERED_TURN_CREDENTIALS_URL")
-    if api_key and credentials_url:
-        try:
-            query = urllib.parse.urlencode({"apiKey": api_key})
-            join_char = "&" if "?" in credentials_url else "?"
-            url = f"{credentials_url}{join_char}{query}"
-            with urllib.request.urlopen(url, timeout=5) as response:
-                payload = response.read().decode("utf-8")
-            raw_servers = json.loads(payload)
-            servers: list[RTCIceServer] = []
-            for item in raw_servers:
-                urls = item.get("urls")
-                if not urls:
-                    continue
-                servers.append(
-                    RTCIceServer(
-                        urls=urls,
-                        username=item.get("username"),
-                        credential=item.get("credential"),
-                    )
-                )
-            if servers:
-                print("Using Metered REST-fetched ICE servers")
-                return servers
-        except Exception as exc:
-            print(f"Metered REST fetch failed: {exc}")
+def parse_ice_servers(ice_servers_payload: object) -> list[RTCIceServer]:
+    if not isinstance(ice_servers_payload, list):
+        return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
 
-    turn_username = os.getenv("METERED_TURN_USERNAME")
-    turn_credential = os.getenv("METERED_TURN_CREDENTIAL")
-    if turn_username and turn_credential:
-        print("Using Metered TURN/STUN servers")
-        return [
-            RTCIceServer(urls="stun:stun.relay.metered.ca:80"),
+    servers: list[RTCIceServer] = []
+    for item in ice_servers_payload:
+        if not isinstance(item, dict):
+            continue
+        urls = item.get("urls")
+        if not urls:
+            continue
+        servers.append(
             RTCIceServer(
-                urls=[
-                    "turn:global.relay.metered.ca:80",
-                    "turn:global.relay.metered.ca:80?transport=tcp",
-                    "turn:global.relay.metered.ca:443",
-                    "turns:global.relay.metered.ca:443?transport=tcp",
-                ],
-                username=turn_username,
-                credential=turn_credential,
-            ),
-        ]
-    print("Using default public STUN only")
+                urls=urls,
+                username=item.get("username"),
+                credential=item.get("credential"),
+            )
+        )
+    if servers:
+        return servers
     return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
 
 
@@ -152,8 +121,7 @@ async def run_webrtc(*, endpoint: str):
     app_id = normalize_app_id(endpoint)
     print(f"Connecting to realtime app {app_id}")
     async with client.realtime(app_id, path="/realtime", use_jwt=False) as connection:
-        ice_config = RTCConfiguration(iceServers=build_ice_servers())
-        pc = RTCPeerConnection(configuration=ice_config)
+        pc: RTCPeerConnection | None = None
         remote_queue: asyncio.Queue[object] = asyncio.Queue(maxsize=1)
         remote_tasks: list[asyncio.Task] = []
 
@@ -166,39 +134,47 @@ async def run_webrtc(*, endpoint: str):
         async def send_action(key_text: str) -> None:
             await rt_send({"type": "action", "action": key_text})
 
-        @pc.on("icecandidate")
-        async def on_icecandidate(candidate):
-            if candidate is None:
-                await rt_send({"type": "icecandidate", "candidate": None})
-                return
-            await rt_send(
-                {
-                    "type": "icecandidate",
-                    "candidate": {
-                        "candidate": candidate.candidate,
-                        "sdpMid": candidate.sdpMid,
-                        "sdpMLineIndex": candidate.sdpMLineIndex,
-                    },
-                }
+        def create_peer_connection(ice_servers_payload: object) -> RTCPeerConnection:
+            ice_servers = parse_ice_servers(ice_servers_payload)
+            print(f"Using {len(ice_servers)} ICE server entries from signaling.")
+            local_pc = RTCPeerConnection(
+                configuration=RTCConfiguration(iceServers=ice_servers)
             )
 
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            print(f"Connection state: {pc.connectionState}")
-            if pc.connectionState in ("failed", "closed", "disconnected"):
-                stop_event.set()
-
-        @pc.on("track")
-        def on_track(track):
-            if track.kind == "video":
-                print("Remote video track received.")
-                remote_tasks.append(
-                    asyncio.create_task(
-                        forward_remote_frames(track, remote_queue, stop_event)
-                    )
+            @local_pc.on("icecandidate")
+            async def on_icecandidate(candidate):
+                if candidate is None:
+                    await rt_send({"type": "icecandidate", "candidate": None})
+                    return
+                await rt_send(
+                    {
+                        "type": "icecandidate",
+                        "candidate": {
+                            "candidate": candidate.candidate,
+                            "sdpMid": candidate.sdpMid,
+                            "sdpMLineIndex": candidate.sdpMLineIndex,
+                        },
+                    }
                 )
 
-        pc.addTransceiver("video", direction="recvonly")
+            @local_pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                print(f"Connection state: {local_pc.connectionState}")
+                if local_pc.connectionState in ("failed", "closed", "disconnected"):
+                    stop_event.set()
+
+            @local_pc.on("track")
+            def on_track(track):
+                if track.kind == "video":
+                    print("Remote video track received.")
+                    remote_tasks.append(
+                        asyncio.create_task(
+                            forward_remote_frames(track, remote_queue, stop_event)
+                        )
+                    )
+
+            local_pc.addTransceiver("video", direction="recvonly")
+            return local_pc
 
         render_task = asyncio.create_task(
             render_and_send_keys(
@@ -206,17 +182,15 @@ async def run_webrtc(*, endpoint: str):
             )
         )
 
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
-        print("Sent offer. Waiting for answer...")
+        offer_sent = False
 
         async def shutdown_on_stop():
             await stop_event.wait()
             with suppress(Exception):
                 await connection.close()
-            with suppress(Exception):
-                await pc.close()
+            if pc is not None:
+                with suppress(Exception):
+                    await pc.close()
 
         shutdown_task = asyncio.create_task(shutdown_on_stop())
 
@@ -230,11 +204,18 @@ async def run_webrtc(*, endpoint: str):
                     print(f"WS message: {msg}")
                     continue
                 msg_type = msg.get("type")
-                if msg_type == "answer" and msg.get("sdp"):
+                if msg_type == "iceServers" and not offer_sent:
+                    pc = create_peer_connection(msg.get("iceServers"))
+                    offer = await pc.createOffer()
+                    await pc.setLocalDescription(offer)
+                    await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
+                    offer_sent = True
+                    print("Sent offer. Waiting for answer...")
+                elif msg_type == "answer" and msg.get("sdp") and pc is not None:
                     await pc.setRemoteDescription(
                         RTCSessionDescription(type="answer", sdp=msg["sdp"])
                     )
-                elif msg_type == "icecandidate":
+                elif msg_type == "icecandidate" and pc is not None:
                     candidate = msg.get("candidate")
                     if candidate is None:
                         await pc.addIceCandidate(None)
@@ -254,7 +235,8 @@ async def run_webrtc(*, endpoint: str):
         finally:
             stop_event.set()
             await connection.close()
-            await pc.close()
+            if pc is not None:
+                await pc.close()
             render_task.cancel()
             shutdown_task.cancel()
             for task in remote_tasks:
