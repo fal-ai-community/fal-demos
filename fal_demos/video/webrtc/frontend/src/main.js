@@ -132,22 +132,6 @@ const getTemporaryAuthToken = async (appId) => {
   return token;
 };
 
-const getIceServers = async () => {
-  const response = await fetch("/fal/ice", {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`ICE request failed: ${response.status} ${errorBody}`);
-  }
-  const payload = await response.json();
-  if (!Array.isArray(payload) || payload.length === 0) {
-    throw new Error("ICE response did not return any servers.");
-  }
-  return payload;
-};
-
 const sendWs = (payload) => {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return;
@@ -288,7 +272,8 @@ startBtn.addEventListener("click", async () => {
   }
 
   let authToken;
-  let iceServers = DEFAULT_ICE_SERVERS;
+  let pendingIceServers = DEFAULT_ICE_SERVERS;
+  let offerSent = false;
   try {
     authToken = await getTemporaryAuthToken(appId);
   } catch (err) {
@@ -299,21 +284,12 @@ startBtn.addEventListener("click", async () => {
     started = false;
     return;
   }
-  try {
-    iceServers = await getIceServers();
-    log(`Loaded ${iceServers.length} ICE server entries from /fal/ice.`);
-  } catch (err) {
-    log(`Falling back to public STUN: ${err.message || err}`);
-  }
-
   ws = new WebSocket(buildWsUrl(appId, authToken));
   ws.binaryType = "arraybuffer";
 
   ws.onopen = async () => {
     setStatus("Connected");
     log("WebSocket open.");
-    await ensurePeer(iceServers);
-    await sendOffer();
   };
 
   ws.onmessage = async (event) => {
@@ -322,9 +298,17 @@ startBtn.addEventListener("click", async () => {
       log(`WS: ${String(msg)}`);
       return;
     }
-    if (msg.type === "answer" && msg.sdp) {
+    if (msg.type === "answer" && msg.sdp && pc) {
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp }));
-    } else if (msg.type === "icecandidate") {
+    } else if (msg.type === "iceServers" && !offerSent) {
+      if (Array.isArray(msg.iceServers) && msg.iceServers.length > 0) {
+        pendingIceServers = msg.iceServers;
+      }
+      log(`Using ${pendingIceServers.length} ICE server entries from signaling.`);
+      await ensurePeer(pendingIceServers);
+      await sendOffer();
+      offerSent = true;
+    } else if (msg.type === "icecandidate" && pc) {
       const candidate = msg.candidate;
       if (candidate) {
         await pc.addIceCandidate(
@@ -337,6 +321,12 @@ startBtn.addEventListener("click", async () => {
       }
     } else if (msg.type === "ready") {
       log("Server ready.");
+      if (!offerSent) {
+        log("No iceServers message yet, using default STUN fallback.");
+        await ensurePeer(pendingIceServers);
+        await sendOffer();
+        offerSent = true;
+      }
     } else if (msg.type === "action") {
       setLastKey(String(msg.action || "none"));
     } else if (msg.type === "error") {

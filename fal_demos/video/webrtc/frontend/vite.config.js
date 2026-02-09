@@ -74,45 +74,6 @@ const falTokenMiddleware = () => ({
       }
     });
 
-    server.middlewares.use("/fal/ice", async (req, res) => {
-      if (req.method !== "GET") {
-        res.statusCode = 405;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Method not allowed" }));
-        return;
-      }
-
-      const credentialsUrl = process.env.METERED_TURN_CREDENTIALS_URL;
-      const meteredApiKey = process.env.METERED_TURN_API_KEY;
-      if (!credentialsUrl || !meteredApiKey) {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(
-          JSON.stringify({
-            error: "Missing METERED_TURN_CREDENTIALS_URL or METERED_TURN_API_KEY on the dev server.",
-          }),
-        );
-        return;
-      }
-
-      try {
-        const query = new URLSearchParams({ apiKey: meteredApiKey }).toString();
-        const joinChar = credentialsUrl.includes("?") ? "&" : "?";
-        const url = `${credentialsUrl}${joinChar}${query}`;
-        const response = await fetch(url, {
-          method: "GET",
-          headers: { Accept: "application/json" },
-        });
-        const payload = await response.text();
-        res.statusCode = response.status;
-        res.setHeader("Content-Type", "application/json");
-        res.end(payload);
-      } catch (error) {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: error.message || String(error) }));
-      }
-    });
   },
 });
 
