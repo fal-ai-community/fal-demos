@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Demo Client</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>WebRTC Demo Client</h1>
+        <p>Connects to your Fal realtime <code>/realtime</code> endpoint.</p>
+      </header>
+
+      <section class="panel">
+        <label for="appId">Endpoint</label>
+        <input id="appId" type="text" value="myuser/myapp/realtime" />
+        <div class="buttons">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+        <div class="status">Status: <span id="status">Disconnected</span></div>
+        <div class="status">Last key sent: <span id="lastKey">none</span></div>
+        <div class="status">Client FPS: <span id="clientFps">0.0</span></div>
+      </section>
+
+      <section class="panel">
+        <h2>Remote Video</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+      </section>
+
+      <section class="panel">
+        <h2>Logs</h2>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
