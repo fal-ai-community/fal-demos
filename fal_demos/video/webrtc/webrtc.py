@@ -1,0 +1,341 @@
+from contextlib import suppress
+from typing import AsyncIterator
+
+import fal
+
+
+class BasicWebRTCVideo(fal.App):
+    machine_type = "M"
+    requirements = [
+        "aiortc",
+        "av",
+        "numpy",
+        "opencv-python>=4.9.0.80",
+    ]
+
+    @fal.realtime("/realtime")
+    async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
+        import asyncio
+        import colorsys
+        import json
+        import os
+        import time
+        import urllib.parse
+        import urllib.request
+
+        import cv2
+        import numpy as np
+        from aiortc import (
+            RTCConfiguration,
+            RTCIceServer,
+            RTCPeerConnection,
+            RTCSessionDescription,
+            VideoStreamTrack,
+        )
+        from aiortc.sdp import candidate_from_sdp
+        from av import VideoFrame
+
+        state = {"last_key": "none"}
+        animation = {"x": 24.0, "y": 240.0, "vx": 3.2, "vy": 2.4, "frame_index": 0}
+        fps_state = {"value": 0.0, "last_ts": None}
+        message_templates = [
+            "You pressed {key}\n[Wow]",
+            "You pressed {key}\n[Much webrtc]",
+            "You pressed {key}\n[Such realtime]",
+        ]
+
+        class GeneratedVideoTrack(VideoStreamTrack):
+            def __init__(self, frame_queue):
+                super().__init__()
+                self._queue = frame_queue
+
+            async def recv(self):
+                frame = await self._queue.get()
+                pts, time_base = await self.next_timestamp()
+                frame.pts = pts
+                frame.time_base = time_base
+                return frame
+
+        def build_ice_servers() -> list[RTCIceServer]:
+            api_key = os.getenv("METERED_TURN_API_KEY")
+            credentials_url = os.getenv("METERED_TURN_CREDENTIALS_URL")
+            if api_key and credentials_url:
+                try:
+                    query = urllib.parse.urlencode({"apiKey": api_key})
+                    join_char = "&" if "?" in credentials_url else "?"
+                    url = f"{credentials_url}{join_char}{query}"
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        payload = response.read().decode("utf-8")
+                    raw_servers = json.loads(payload)
+                    servers: list[RTCIceServer] = []
+                    for item in raw_servers:
+                        urls = item.get("urls")
+                        if not urls:
+                            continue
+                        servers.append(
+                            RTCIceServer(
+                                urls=urls,
+                                username=item.get("username"),
+                                credential=item.get("credential"),
+                            )
+                        )
+                    if servers:
+                        print("WebRTC: using Metered REST-fetched ICE servers")
+                        return servers
+                except Exception as exc:
+                    print(f"WebRTC: Metered REST fetch failed: {exc}")
+
+            turn_username = os.getenv("METERED_TURN_USERNAME")
+            turn_credential = os.getenv("METERED_TURN_CREDENTIAL")
+            if turn_username and turn_credential:
+                print("WebRTC: using Metered TURN/STUN servers")
+                return [
+                    RTCIceServer(urls="stun:stun.relay.metered.ca:80"),
+                    RTCIceServer(
+                        urls=[
+                            "turn:global.relay.metered.ca:80",
+                            "turn:global.relay.metered.ca:80?transport=tcp",
+                            "turn:global.relay.metered.ca:443",
+                            "turns:global.relay.metered.ca:443?transport=tcp",
+                        ],
+                        username=turn_username,
+                        credential=turn_credential,
+                    ),
+                ]
+            print("WebRTC: using default public STUN only")
+            return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+        ice_config = RTCConfiguration(iceServers=build_ice_servers())
+        pc = RTCPeerConnection(configuration=ice_config)
+        frame_queue: asyncio.Queue[VideoFrame] = asyncio.Queue(maxsize=3)
+        ready_for_frames = asyncio.Event()
+        stop_event = asyncio.Event()
+        outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def send(payload: dict) -> None:
+            if stop_event.is_set():
+                return
+            await outgoing.put(payload)
+
+        async def send_error(prefix, exc):
+            await send(
+                {"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"}
+            )
+            stop_event.set()
+            await outgoing.put(None)
+
+        @pc.on("icecandidate")
+        async def on_icecandidate(candidate):
+            if candidate is None:
+                await send({"type": "icecandidate", "candidate": None})
+                return
+            await send(
+                {
+                    "type": "icecandidate",
+                    "candidate": {
+                        "candidate": candidate.candidate,
+                        "sdpMid": candidate.sdpMid,
+                        "sdpMLineIndex": candidate.sdpMLineIndex,
+                    },
+                }
+            )
+
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            print(f"WebRTC: connection state {pc.connectionState}")
+            if pc.connectionState in ("failed", "closed", "disconnected"):
+                stop_event.set()
+                await outgoing.put(None)
+
+        pc.addTrack(GeneratedVideoTrack(frame_queue))
+
+        def make_frame(last_key: str) -> VideoFrame:
+            height, width = 480, 640
+            hue = (animation["frame_index"] * 0.0035) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.75, 0.95)
+            bgr = np.array([int(b * 255), int(g * 255), int(r * 255)], dtype=np.uint8)
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            frame[:, :] = bgr
+
+            frame_index = int(animation["frame_index"])
+            template = message_templates[(frame_index // 75) % len(message_templates)]
+            text = template.format(key=last_key)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text_scale = 1.0
+            text_thickness = 2
+            text_lines = text.splitlines()
+            line_metrics = [
+                cv2.getTextSize(line, font, text_scale, text_thickness)
+                for line in text_lines
+            ]
+            line_widths = [size[0][0] for size in line_metrics]
+            line_heights = [size[0][1] for size in line_metrics]
+            max_baseline = max(size[1] for size in line_metrics)
+            line_step = max(line_heights) + 10
+            text_width = max(line_widths)
+            margin = 8
+            min_x = float(margin)
+            max_x = float(width - margin - text_width)
+            min_y = float(margin + line_heights[0])
+            max_y = float(
+                height - margin - max_baseline - (len(text_lines) - 1) * line_step
+            )
+
+            if animation["x"] <= min_x or animation["x"] >= max_x:
+                animation["vx"] *= -1.0
+            if animation["y"] <= min_y or animation["y"] >= max_y:
+                animation["vy"] *= -1.0
+
+            animation["x"] = min(max(animation["x"] + animation["vx"], min_x), max_x)
+            animation["y"] = min(max(animation["y"] + animation["vy"], min_y), max_y)
+
+            line_x = int(animation["x"])
+            line_y = int(animation["y"])
+            for line in text_lines:
+                cv2.putText(
+                    frame,
+                    line,
+                    (line_x, line_y),
+                    font,
+                    text_scale,
+                    (0, 0, 255),  # Red text in BGR.
+                    text_thickness,
+                    cv2.LINE_AA,
+                )
+                line_y += line_step
+            fps_text = f"FPS: {fps_state['value']:.1f}"
+            cv2.putText(
+                frame,
+                fps_text,
+                (12, 30),
+                font,
+                0.75,
+                (0, 0, 0),
+                3,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                fps_text,
+                (12, 30),
+                font,
+                0.75,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            animation["frame_index"] += 1
+            return VideoFrame.from_ndarray(frame, format="bgr24")
+
+        async def frame_producer():
+            await ready_for_frames.wait()
+            while not stop_event.is_set():
+                now = time.perf_counter()
+                if fps_state["last_ts"] is not None:
+                    dt = now - float(fps_state["last_ts"])
+                    if dt > 0:
+                        instant_fps = 1.0 / dt
+                        if fps_state["value"] == 0.0:
+                            fps_state["value"] = instant_fps
+                        else:
+                            fps_state["value"] = (0.9 * fps_state["value"]) + (
+                                0.1 * instant_fps
+                            )
+                fps_state["last_ts"] = now
+                video_frame = make_frame(
+                    last_key=str(state["last_key"]),
+                )
+                if frame_queue.full():
+                    with suppress(asyncio.QueueEmpty):
+                        frame_queue.get_nowait()
+                await frame_queue.put(video_frame)
+                await asyncio.sleep(1 / 30)
+
+        producer_task = asyncio.create_task(frame_producer())
+
+        async def handle_offer(payload):
+            try:
+                offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
+                await pc.setRemoteDescription(offer)
+                answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+                await send({"type": "answer", "sdp": pc.localDescription.sdp})
+                ready_for_frames.set()
+                return True
+            except Exception as exc:
+                await send_error("offer_failed", exc)
+                return False
+
+        async def handle_icecandidate(payload):
+            try:
+                candidate = payload.get("candidate")
+                if candidate is None:
+                    await pc.addIceCandidate(None)
+                else:
+                    parsed = candidate_from_sdp(candidate.get("candidate", ""))
+                    parsed.sdpMid = candidate.get("sdpMid")
+                    parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
+                    await pc.addIceCandidate(parsed)
+                return True
+            except Exception as exc:
+                await send_error("ice_failed", exc)
+                return False
+
+        async def handle_action(payload):
+            key_text = payload.get("action")
+            if key_text is not None:
+                state["last_key"] = str(key_text)
+            await send({"type": "action", "action": state["last_key"]})
+            return True
+
+        async def handle_payload(payload):
+            if isinstance(payload, dict):
+                msg_type = payload.get("type")
+                if msg_type == "offer":
+                    return await handle_offer(payload)
+                if msg_type == "icecandidate":
+                    return await handle_icecandidate(payload)
+                if msg_type == "action":
+                    return await handle_action(payload)
+            return True
+
+        async def input_loop() -> None:
+            try:
+                async for payload in inputs:
+                    if stop_event.is_set():
+                        break
+                    should_continue = await handle_payload(payload)
+                    if not should_continue:
+                        break
+            finally:
+                stop_event.set()
+                await outgoing.put(None)
+
+        input_task: asyncio.Task | None = None
+        try:
+            await outgoing.put({"type": "ready"})
+            input_task = asyncio.create_task(input_loop())
+            while True:
+                payload = await outgoing.get()
+                if payload is None:
+                    break
+                yield payload
+        finally:
+            stop_event.set()
+            if input_task is not None:
+                input_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await input_task
+            producer_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer_task
+            await pc.close()
+
+
+if __name__ == "__main__":
+    from webrtc_client import run
+
+    info = BasicWebRTCVideo.spawn()
+    print(f"App ID: {info.application}")
+    info.wait()
+    run(endpoint=info.application + "/realtime")
