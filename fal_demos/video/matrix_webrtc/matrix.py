@@ -1,8 +1,89 @@
 from contextlib import suppress
-from typing import AsyncIterator
+from typing import Annotated, AsyncIterator, Literal
 
 import fal
 from fal.toolkit import clone_repository
+from pydantic import BaseModel, Field, RootModel, TypeAdapter, ValidationError
+
+
+class IceCandidate(BaseModel):
+    candidate: str
+    sdpMid: str | None = None
+    sdpMLineIndex: int | None = None
+
+
+class OfferInput(BaseModel):
+    type: Literal["offer"]
+    sdp: str
+
+
+class IceCandidateInput(BaseModel):
+    type: Literal["icecandidate"]
+    candidate: IceCandidate | None = None
+
+
+class ActionInput(BaseModel):
+    type: Literal["action"]
+    action: str
+
+
+class PauseInput(BaseModel):
+    type: Literal["pause"]
+    paused: bool = False
+
+
+RealtimeInputMessage = Annotated[
+    OfferInput | IceCandidateInput | ActionInput | PauseInput,
+    Field(discriminator="type"),
+]
+
+
+class RealtimeInput(RootModel):
+    root: RealtimeInputMessage
+
+
+class IceServersOutput(BaseModel):
+    type: Literal["iceservers"]
+    iceservers: list[dict]
+
+
+class AnswerOutput(BaseModel):
+    type: Literal["answer"]
+    sdp: str
+
+
+class IceCandidateOutput(BaseModel):
+    type: Literal["icecandidate"]
+    candidate: IceCandidate | None = None
+
+
+class PauseOutput(BaseModel):
+    type: Literal["pause"]
+    paused: bool
+
+
+class StreamExhaustedOutput(BaseModel):
+    type: Literal["stream_exhausted"]
+
+
+class ErrorOutput(BaseModel):
+    type: Literal["error"]
+    error: str
+
+
+RealtimeOutputMessage = Annotated[
+    IceServersOutput
+    | AnswerOutput
+    | IceCandidateOutput
+    | PauseOutput
+    | StreamExhaustedOutput
+    | ErrorOutput,
+    Field(discriminator="type"),
+]
+
+
+class RealtimeOutput(RootModel):
+    root: RealtimeOutputMessage
 
 
 class MatrixWebRTC2(fal.App):
@@ -297,8 +378,10 @@ class MatrixWebRTC2(fal.App):
                 self._last_seed_key = seed_key
         return self._session
 
-    @fal.realtime("/realtime")
-    async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
+    @fal.realtime("/realtime", buffering=5)
+    async def webrtc(
+        self, inputs: AsyncIterator[RealtimeInput]
+    ) -> AsyncIterator[RealtimeOutput]:
         import asyncio
         import concurrent.futures
         import time
@@ -430,16 +513,17 @@ class MatrixWebRTC2(fal.App):
         stop_event = asyncio.Event()
         resume_event = asyncio.Event()
         resume_event.set()
-        outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
+        outgoing: asyncio.Queue[RealtimeOutput | None] = asyncio.Queue()
+        input_adapter = TypeAdapter(RealtimeInputMessage)
 
-        async def send(payload: dict) -> None:
+        async def send(payload: RealtimeOutputMessage) -> None:
             if stop_event.is_set():
                 return
-            await outgoing.put(payload)
+            await outgoing.put(RealtimeOutput(root=payload))
 
         async def send_error(prefix: str, exc: Exception) -> None:
             await send(
-                {"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"}
+                ErrorOutput(type="error", error=f"{prefix}:{type(exc).__name__}:{exc}")
             )
             stop_event.set()
             await outgoing.put(None)
@@ -447,17 +531,17 @@ class MatrixWebRTC2(fal.App):
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate is None:
-                await send({"type": "icecandidate", "candidate": None})
+                await send(IceCandidateOutput(type="icecandidate", candidate=None))
                 return
             await send(
-                {
-                    "type": "icecandidate",
-                    "candidate": {
-                        "candidate": candidate.candidate,
-                        "sdpMid": candidate.sdpMid,
-                        "sdpMLineIndex": candidate.sdpMLineIndex,
-                    },
-                }
+                IceCandidateOutput(
+                    type="icecandidate",
+                    candidate=IceCandidate(
+                        candidate=candidate.candidate,
+                        sdpMid=candidate.sdpMid,
+                        sdpMLineIndex=candidate.sdpMLineIndex,
+                    ),
+                )
             )
 
         @pc.on("connectionstatechange")
@@ -504,7 +588,7 @@ class MatrixWebRTC2(fal.App):
                     break
 
                 if block is None:
-                    await send({"type": "stream_exhausted"})
+                    await send(StreamExhaustedOutput(type="stream_exhausted"))
                     stop_event.set()
                     await outgoing.put(None)
                     break
@@ -532,61 +616,58 @@ class MatrixWebRTC2(fal.App):
 
         producer_task = asyncio.create_task(frame_producer())
 
-        async def handle_offer(payload: dict) -> bool:
+        async def handle_offer(payload: OfferInput) -> bool:
             try:
                 if pc.remoteDescription is not None:
                     print("WebRTC: ignoring duplicate offer")
                     return True
-                offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
+                offer = RTCSessionDescription(sdp=payload.sdp, type=payload.type)
                 await pc.setRemoteDescription(offer)
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
-                await send({"type": "answer", "sdp": pc.localDescription.sdp})
+                await send(AnswerOutput(type="answer", sdp=pc.localDescription.sdp))
                 ready_for_frames.set()
                 return True
             except Exception as exc:
                 await send_error("offer_failed", exc)
                 return False
 
-        async def handle_icecandidate(payload: dict) -> bool:
+        async def handle_icecandidate(payload: IceCandidateInput) -> bool:
             try:
-                candidate = payload.get("candidate")
+                candidate = payload.candidate
                 if candidate is None:
                     await pc.addIceCandidate(None)
                 else:
-                    parsed = candidate_from_sdp(candidate.get("candidate", ""))
-                    parsed.sdpMid = candidate.get("sdpMid")
-                    parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
+                    parsed = candidate_from_sdp(candidate.candidate)
+                    parsed.sdpMid = candidate.sdpMid
+                    parsed.sdpMLineIndex = candidate.sdpMLineIndex
                     await pc.addIceCandidate(parsed)
                 return True
             except Exception as exc:
                 await send_error("ice_failed", exc)
                 return False
 
-        async def handle_action(payload: dict) -> bool:
-            await action_queue.put(payload)
+        async def handle_action(payload: ActionInput) -> bool:
+            await action_queue.put(payload.action)
             return True
 
-        async def handle_pause(payload: dict) -> bool:
-            if payload.get("paused", False):
+        async def handle_pause(payload: PauseInput) -> bool:
+            if payload.paused:
                 resume_event.clear()
             else:
                 resume_event.set()
-            await send({"type": "pause", "paused": not resume_event.is_set()})
+            await send(PauseOutput(type="pause", paused=not resume_event.is_set()))
             return True
 
-        async def handle_payload(payload: object) -> bool:
-            if isinstance(payload, dict):
-                msg_type = payload.get("type")
-                if msg_type == "offer":
-                    return await handle_offer(payload)
-                if msg_type == "icecandidate":
-                    return await handle_icecandidate(payload)
-                if msg_type == "action":
-                    return await handle_action(payload)
-                if msg_type == "pause":
-                    return await handle_pause(payload)
-            await action_queue.put(payload)
+        async def handle_payload(payload: RealtimeInputMessage) -> bool:
+            if isinstance(payload, OfferInput):
+                return await handle_offer(payload)
+            if isinstance(payload, IceCandidateInput):
+                return await handle_icecandidate(payload)
+            if isinstance(payload, ActionInput):
+                return await handle_action(payload)
+            if isinstance(payload, PauseInput):
+                return await handle_pause(payload)
             return True
 
         async def input_loop() -> None:
@@ -594,7 +675,16 @@ class MatrixWebRTC2(fal.App):
                 async for payload in inputs:
                     if stop_event.is_set():
                         break
-                    should_continue = await handle_payload(payload)
+                    try:
+                        parsed_payload = (
+                            payload.root
+                            if isinstance(payload, RealtimeInput)
+                            else input_adapter.validate_python(payload)
+                        )
+                    except ValidationError as exc:
+                        await send_error("invalid_payload", exc)
+                        break
+                    should_continue = await handle_payload(parsed_payload)
                     if not should_continue:
                         break
             finally:
@@ -603,8 +693,13 @@ class MatrixWebRTC2(fal.App):
 
         input_task: asyncio.Task | None = None
         try:
-            await outgoing.put({"type": "ready"})
-            await outgoing.put({"type": "iceServers", "iceServers": signal_ice_servers})
+            await outgoing.put(
+                RealtimeOutput(
+                    root=IceServersOutput(
+                        type="iceservers", iceservers=signal_ice_servers
+                    )
+                )
+            )
             input_task = asyncio.create_task(input_loop())
             while True:
                 payload = await outgoing.get()
