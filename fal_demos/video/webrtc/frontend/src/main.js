@@ -319,8 +319,6 @@ startBtn.addEventListener("click", async () => {
           }),
         );
       }
-    } else if (msg.type === "action") {
-      setLastKey(String(msg.action || "none"));
     } else if (msg.type === "error") {
       log(`Server error: ${msg.error}`);
     } else {

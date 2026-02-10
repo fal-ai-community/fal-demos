@@ -224,8 +224,6 @@ async def run_webrtc(*, endpoint: str):
                     parsed.sdpMid = candidate.get("sdpMid")
                     parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
                     await pc.addIceCandidate(parsed)
-                elif msg_type == "action":
-                    print(f"Server received key: {msg.get('action')}")
                 elif msg_type == "error":
                     print(f"Server error: {msg.get('error')}")
                 else:
