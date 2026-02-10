@@ -46,7 +46,7 @@ Open the Vite app in your browser and set Endpoint to:
 
 ## TURN / ICE configuration
 
-The backend sends ICE servers to clients over realtime signaling (`type: iceServers`).
+The backend sends ICE servers to clients over realtime signaling (`type: iceservers`).
 So clients do not need TURN credentials configured locally.
 
 Server-side ICE mode priority:

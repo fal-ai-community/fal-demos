@@ -300,9 +300,9 @@ startBtn.addEventListener("click", async () => {
     }
     if (msg.type === "answer" && msg.sdp && pc) {
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp }));
-    } else if (msg.type === "iceServers" && !offerSent) {
-      if (Array.isArray(msg.iceServers) && msg.iceServers.length > 0) {
-        pendingIceServers = msg.iceServers;
+    } else if (msg.type === "iceservers" && !offerSent) {
+      if (Array.isArray(msg.iceservers) && msg.iceservers.length > 0) {
+        pendingIceServers = msg.iceservers;
       }
       log(`Using ${pendingIceServers.length} ICE server entries from signaling.`);
       await ensurePeer(pendingIceServers);
@@ -318,14 +318,6 @@ startBtn.addEventListener("click", async () => {
             sdpMLineIndex: candidate.sdpMLineIndex,
           }),
         );
-      }
-    } else if (msg.type === "ready") {
-      log("Server ready.");
-      if (!offerSent) {
-        log("No iceServers message yet, using default STUN fallback.");
-        await ensurePeer(pendingIceServers);
-        await sendOffer();
-        offerSent = true;
       }
     } else if (msg.type === "action") {
       setLastKey(String(msg.action || "none"));
