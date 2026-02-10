@@ -5,9 +5,10 @@ import fal
 from fal.toolkit import clone_repository
 
 
-class MatrixGame2(fal.App):
+class MatrixWebRTC2(fal.App):
     machine_type = "GPU-H100"
-    startup_timeout = 1200  # 20 minutes
+    startup_timeout = 1200
+    TURN_EXPIRY_SECONDS = 600
 
     requirements = [
         "accelerate>=1.1.1",
@@ -54,17 +55,23 @@ class MatrixGame2(fal.App):
 
     def setup(self):
         import os
+        import re
+        import subprocess
         import sys
         import threading
-        import re
 
         self._repo_path = clone_repository(
             "https://github.com/efiop/Matrix-Game.git",
-            commit_hash="edd9475d0600212d9205c6213543c5dd5c668b4f",
+            commit_hash="50af8cb6e801caae43dae96f10d34626f38dd2e1",
         )
+        self._matrix_repo_dir = self._repo_path / "Matrix-Game-2"
+        if not self._matrix_repo_dir.exists():
+            raise RuntimeError(
+                f"Expected Matrix-Game-2 in cloned repo, not found at {self._matrix_repo_dir}"
+            )
 
-        sys.path.insert(0, str(self._repo_path / "Matrix-Game-2"))
-        os.chdir(self._repo_path / "Matrix-Game-2")
+        sys.path.insert(0, str(self._matrix_repo_dir))
+        os.chdir(self._matrix_repo_dir)
 
         cache_version = os.getenv("MATRIX_CACHE_VERSION", "v1")
         gpu_slug = "unknown"
@@ -77,6 +84,7 @@ class MatrixGame2(fal.App):
             )
         except Exception:
             pass
+
         inductor_cache_dir = (
             f"/data/inductor-cache/matrix-game-2/{gpu_slug}/{cache_version}"
         )
@@ -85,40 +93,130 @@ class MatrixGame2(fal.App):
         )
         os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", inductor_cache_dir)
         os.environ.setdefault("TRITON_CACHE_DIR", triton_cache_dir)
-        os.system(
-            "hf download Skywork/Matrix-Game-2.0 --local-dir /data/Matrix-Game-2.0"
+
+        subprocess.run(
+            [
+                "hf",
+                "download",
+                "Skywork/Matrix-Game-2.0",
+                "--local-dir",
+                "/data/Matrix-Game-2.0",
+            ],
+            check=True,
         )
 
-        self._default_mode = "universal"
+        self._metered_secret_key = os.getenv("METERED_TURN_SECRET_KEY")
+        self._metered_label = os.getenv("METERED_TURN_LABEL")
+        required_env_vars = {
+            "METERED_TURN_SECRET_KEY": self._metered_secret_key,
+            "METERED_TURN_LABEL": self._metered_label,
+        }
+        missing_env_vars = [
+            key for key, value in required_env_vars.items() if not value
+        ]
+        if missing_env_vars:
+            missing = ", ".join(missing_env_vars)
+            raise RuntimeError(
+                f"Missing required Metered TURN env vars: {missing}. "
+                "Set them on the server before starting the realtime app."
+            )
+
+        self._mode = "gta_drive"
         self._mode_seed_dirs = {
             "universal": "universal",
             "gta_drive": "gta_drive",
             "templerun": "temple_run",
         }
-        seed_dir = self._mode_seed_dirs.get(self._default_mode, "universal")
-        self._default_seed_path = (
-            self._repo_path / f"Matrix-Game-2/demo_images/{seed_dir}/0001.png"
-        )
-        self._session_lock = threading.RLock()
-        self._sessions = {
-            self._default_mode: self._build_session(self._default_mode),
-        }
-        self._last_seed = {}
+        seed_dir = self._mode_seed_dirs[self._mode]
+        self._seed_path = self._matrix_repo_dir / f"demo_images/{seed_dir}/0000.png"
+        if not self._seed_path.exists():
+            raise RuntimeError(f"Seed image not found at {self._seed_path}")
 
-        session = self._prepare_session(True)
+        self._session_lock = threading.RLock()
+        self._session = self._build_session(mode=self._mode)
+        self._last_seed_key: str | None = None
+
+        # Warmup one streaming block so first remote frame appears sooner.
+        self._prepare_session(force=True)
         with self._session_lock:
 
             def action_provider(current_start_frame, num_frame_per_block, action_mode):
                 return "q u"
 
-            stream = session.stream_frames(action_provider)
+            warmup_stream = self._session.stream_frames(action_provider)
             try:
-                next(stream)
+                next(warmup_stream)
             except StopIteration:
                 pass
-        self._last_seed[self._default_mode] = None
+            finally:
+                close_stream = getattr(warmup_stream, "close", None)
+                if callable(close_stream):
+                    with suppress(Exception):
+                        close_stream()
 
-    def _build_session(self, mode="universal"):
+    def _build_ice_servers(self) -> list[dict]:
+        import json
+        import urllib.parse
+        import urllib.request
+
+        label = self._metered_label
+        secret_key = self._metered_secret_key
+        assert label is not None
+        assert secret_key is not None
+        credentials_url = f"https://{label}.metered.live/api/v1/turn/credentials"
+        credential_url = f"https://{label}.metered.live/api/v1/turn/credential"
+
+        def fetch_ice_servers(api_key: str) -> list[dict]:
+            query = urllib.parse.urlencode({"apiKey": api_key})
+            join_char = "&" if "?" in credentials_url else "?"
+            url = f"{credentials_url}{join_char}{query}"
+            with urllib.request.urlopen(url, timeout=5) as response:
+                payload = response.read().decode("utf-8")
+            raw_servers = json.loads(payload)
+            servers: list[dict] = []
+            for item in raw_servers:
+                urls = item.get("urls")
+                if not urls:
+                    continue
+                servers.append(
+                    {
+                        "urls": urls,
+                        "username": item.get("username"),
+                        "credential": item.get("credential", item.get("password")),
+                    }
+                )
+            return servers
+
+        query = urllib.parse.urlencode({"secretKey": secret_key})
+        join_char = "&" if "?" in credential_url else "?"
+        url = f"{credential_url}{join_char}{query}"
+        body = json.dumps(
+            {
+                "expiryInSeconds": self.TURN_EXPIRY_SECONDS,
+                "label": "fal-webrtc-demo",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            url=url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+        credential_payload = json.loads(payload)
+        temporary_api_key = credential_payload.get("apiKey")
+        if not temporary_api_key:
+            raise RuntimeError("Metered credential response missing apiKey.")
+
+        servers = fetch_ice_servers(temporary_api_key)
+        if not servers:
+            raise RuntimeError("Metered returned empty ICE server list.")
+
+        print("WebRTC: using Metered secret-minted ICE servers")
+        return servers
+
+    def _build_session(self, mode: str = "universal"):
         import glob
         import os
         import sys
@@ -131,14 +229,20 @@ class MatrixGame2(fal.App):
             "templerun": "configs/inference_yaml/inference_templerun.yaml",
         }
         config_path = config_map.get(mode, config_map["universal"])
-        sys.argv = [
-            "matrix_game2_app.py",
-            "--config",
-            config_path,
-            "--pretrained_model_path",
-            "/data/Matrix-Game-2.0",
-        ]
-        args = parse_args()
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = [
+                "matrix2.py",
+                "--config_path",
+                config_path,
+                "--pretrained_model_path",
+                "/data/Matrix-Game-2.0",
+            ]
+            args = parse_args()
+        finally:
+            sys.argv = original_argv
+
         if not args.checkpoint_path:
             config_name = os.path.basename(args.config_path)
             if config_name == "inference_universal.yaml":
@@ -165,7 +269,8 @@ class MatrixGame2(fal.App):
                     args.checkpoint_path = gta_candidates[0]
                 else:
                     raise FileNotFoundError(
-                        f"No gta_drive checkpoint found under {args.pretrained_model_path}"
+                        "No gta_drive checkpoint found under "
+                        f"{args.pretrained_model_path}"
                     )
             else:
                 candidates = glob.glob(
@@ -175,66 +280,116 @@ class MatrixGame2(fal.App):
                 if candidates:
                     candidates.sort(key=lambda p: os.path.getsize(p), reverse=True)
                     args.checkpoint_path = candidates[0]
-            if args.checkpoint_path:
-                print(f"Using checkpoint: {args.checkpoint_path}")
+
+        if args.checkpoint_path:
+            print(f"Using checkpoint: {args.checkpoint_path}")
         return InteractiveGameStreamingSession(args)
 
-    def _prepare_session(self, force=False):
-        seed_image = str(self._default_seed_path)
-        seed_key = f"{seed_image}:{self._default_mode}"
+    def _prepare_session(self, force: bool = False):
+        seed_key = f"{self._seed_path}:{self._mode}"
         with self._session_lock:
-            session = self._sessions.get(self._default_mode)
-            if session is None:
-                raise ValueError(
-                    f"Mode {self._default_mode} is not loaded in this deployment."
-                )
             if force:
-                self._last_seed[self._default_mode] = None
-            if self._last_seed.get(self._default_mode) != seed_key or not getattr(
-                session, "_prepared", False
+                self._last_seed_key = None
+            if self._last_seed_key != seed_key or not getattr(
+                self._session, "_prepared", False
             ):
-                session.prepare(seed_image, mode=self._default_mode)
-                self._last_seed[self._default_mode] = seed_key
-        return session
+                self._session.prepare(str(self._seed_path), mode=self._mode)
+                self._last_seed_key = seed_key
+        return self._session
 
-    @fal.realtime("/webrtc")
+    @fal.realtime("/realtime")
     async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
         import asyncio
-        from av import VideoFrame
-        from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+        import concurrent.futures
+        import time
+
+        from aiortc import (
+            RTCConfiguration,
+            RTCIceServer,
+            RTCPeerConnection,
+            RTCSessionDescription,
+            VideoStreamTrack,
+        )
         from aiortc.sdp import candidate_from_sdp
+        from av import VideoFrame
 
         session = await asyncio.to_thread(self._prepare_session, True)
         stream_holder = {"stream": None}
-        state = {"pending": None, "last": "q u"}
+        state = {"last_action": "q u", "pending_action": None}
+        render_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        action_queue: asyncio.Queue[object] = asyncio.Queue()
+        metrics = {
+            "generated_frames": 0,
+            "sent_frames": 0,
+            "generated_window_start": time.perf_counter(),
+            "sent_window_start": time.perf_counter(),
+        }
+
+        def normalize_action(payload: object) -> str:
+            movement_keys = {"w", "a", "s", "d", "q"}
+            camera_keys = {"i", "j", "k", "l", "u"}
+            aliases = {
+                "up": "w",
+                "down": "s",
+                "left": "a",
+                "right": "d",
+            }
+
+            if isinstance(payload, dict):
+                value = payload.get("action")
+            else:
+                value = payload
+            if value is None:
+                return "q u"
+
+            tokens = [token for token in str(value).strip().lower().split() if token]
+            if not tokens:
+                return "q u"
+
+            move = "q"
+            look = "u"
+            for token in tokens:
+                canonical = aliases.get(token, token)
+                if canonical in movement_keys:
+                    move = canonical
+                if canonical in camera_keys:
+                    look = canonical
+            return f"{move} {look}"
 
         def action_provider(current_start_frame, num_frame_per_block, action_mode):
-            if state["pending"] is not None:
-                state["last"] = state["pending"]
-                state["pending"] = None
-            return state["last"]
+            if state["pending_action"] is not None:
+                state["last_action"] = state["pending_action"]
+                state["pending_action"] = None
+            return state["last_action"]
 
         def reset_stream():
-            state["pending"] = None
-            state["last"] = "q u"
-            stream_holder["stream"] = session.stream_frames(action_provider)
+            state["pending_action"] = None
+            state["last_action"] = "q u"
+            old_stream = stream_holder.get("stream")
+            close_stream = getattr(old_stream, "close", None)
+            if callable(close_stream):
+                with suppress(Exception):
+                    close_stream()
+            stream_holder["stream"] = None
 
         reset_stream()
 
-        def render_block_frames(action):
+        def render_block(action: str | None):
             with self._session_lock:
+                stream = stream_holder["stream"]
+                if stream is None:
+                    stream = session.stream_frames(action_provider)
+                    stream_holder["stream"] = stream
                 if action is not None:
-                    state["pending"] = action
+                    state["pending_action"] = action
                 try:
-                    block = next(stream_holder["stream"])
+                    return next(stream)
                 except StopIteration:
                     return None
-            return block
 
-        def coerce_action(payload):
-            if isinstance(payload, dict):
-                return payload.get("action", payload)
-            return payload
+        async def render_block_async(action: str | None):
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(render_executor, render_block, action)
 
         class BlockVideoTrack(VideoStreamTrack):
             def __init__(self, frame_queue):
@@ -243,18 +398,38 @@ class MatrixGame2(fal.App):
 
             async def recv(self):
                 frame = await self._queue.get()
+                metrics["sent_frames"] += 1
+                sent_elapsed = time.perf_counter() - float(metrics["sent_window_start"])
+                if sent_elapsed >= 2.0:
+                    send_fps = float(metrics["sent_frames"]) / sent_elapsed
+                    print(
+                        "WebRTC: send fps "
+                        f"{send_fps:.1f} (queue={self._queue.qsize()})"
+                    )
+                    metrics["sent_frames"] = 0
+                    metrics["sent_window_start"] = time.perf_counter()
                 pts, time_base = await self.next_timestamp()
                 frame.pts = pts
                 frame.time_base = time_base
                 return frame
 
-        pc = RTCPeerConnection()
+        signal_ice_servers = self._build_ice_servers()
+        rtc_ice_servers = [
+            RTCIceServer(
+                urls=server["urls"],
+                username=server.get("username"),
+                credential=server.get("credential"),
+            )
+            for server in signal_ice_servers
+        ]
+        pc = RTCPeerConnection(
+            configuration=RTCConfiguration(iceServers=rtc_ice_servers)
+        )
         frame_queue: asyncio.Queue[VideoFrame] = asyncio.Queue(maxsize=24)
         ready_for_frames = asyncio.Event()
         stop_event = asyncio.Event()
         resume_event = asyncio.Event()
         resume_event.set()
-        first_frame_logged = False
         outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
 
         async def send(payload: dict) -> None:
@@ -262,7 +437,7 @@ class MatrixGame2(fal.App):
                 return
             await outgoing.put(payload)
 
-        async def send_error(prefix, exc):
+        async def send_error(prefix: str, exc: Exception) -> None:
             await send(
                 {"type": "error", "error": f"{prefix}:{type(exc).__name__}:{exc}"}
             )
@@ -295,48 +470,74 @@ class MatrixGame2(fal.App):
         pc.addTrack(BlockVideoTrack(frame_queue))
 
         async def frame_producer():
-            nonlocal session, first_frame_logged
             await ready_for_frames.wait()
             print("WebRTC: frame producer started")
             while not stop_event.is_set():
                 await resume_event.wait()
+                action_value: str | None = None
                 try:
-                    payload = action_queue.get_nowait()
+                    while True:
+                        payload = action_queue.get_nowait()
+                        action_value = normalize_action(payload)
                 except asyncio.QueueEmpty:
-                    action = state["last"]
-                else:
-                    action = coerce_action(payload)
-                    if action is not None:
-                        state["last"] = action
-                if action is None:
-                    action = "q u"
+                    pass
+                if action_value is None:
+                    action_value = state["last_action"]
 
                 try:
-                    block = await asyncio.to_thread(render_block_frames, action)
+                    started = time.perf_counter()
+                    block = await asyncio.wait_for(
+                        asyncio.shield(
+                            asyncio.create_task(render_block_async(action_value))
+                        ),
+                        timeout=20.0,
+                    )
+                    dt = time.perf_counter() - started
+                    if dt > 0.5:
+                        print(f"WebRTC: generated block in {dt:.2f}s")
+                except asyncio.TimeoutError:
+                    print("WebRTC: generation timed out, resetting stream")
+                    reset_stream()
+                    continue
                 except Exception as exc:
                     await send_error("frame_failed", exc)
                     break
+
                 if block is None:
                     await send({"type": "stream_exhausted"})
                     stop_event.set()
                     await outgoing.put(None)
                     break
 
+                block_len = len(block)
+                metrics["generated_frames"] += block_len
+                generated_elapsed = time.perf_counter() - float(
+                    metrics["generated_window_start"]
+                )
+                if generated_elapsed >= 2.0:
+                    gen_fps = float(metrics["generated_frames"]) / generated_elapsed
+                    print(
+                        "WebRTC: generation fps "
+                        f"{gen_fps:.1f} (block={block_len}, queue={frame_queue.qsize()})"
+                    )
+                    metrics["generated_frames"] = 0
+                    metrics["generated_window_start"] = time.perf_counter()
+
                 for frame in block:
                     video_frame = VideoFrame.from_ndarray(frame, format="rgb24")
+                    if frame_queue.full():
+                        with suppress(asyncio.QueueEmpty):
+                            frame_queue.get_nowait()
                     await frame_queue.put(video_frame)
-                    if not first_frame_logged:
-                        print("WebRTC: enqueued first video frame")
-                        first_frame_logged = True
 
-        action_queue: asyncio.Queue[object] = asyncio.Queue()
         producer_task = asyncio.create_task(frame_producer())
 
-        async def handle_offer(payload):
+        async def handle_offer(payload: dict) -> bool:
             try:
-                print("WebRTC: received offer")
-                offer_sdp = payload["sdp"]
-                offer = RTCSessionDescription(sdp=offer_sdp, type=payload["type"])
+                if pc.remoteDescription is not None:
+                    print("WebRTC: ignoring duplicate offer")
+                    return True
+                offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
                 await pc.setRemoteDescription(offer)
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
@@ -347,9 +548,8 @@ class MatrixGame2(fal.App):
                 await send_error("offer_failed", exc)
                 return False
 
-        async def handle_icecandidate(payload):
+        async def handle_icecandidate(payload: dict) -> bool:
             try:
-                print("WebRTC: received icecandidate")
                 candidate = payload.get("candidate")
                 if candidate is None:
                     await pc.addIceCandidate(None)
@@ -363,13 +563,11 @@ class MatrixGame2(fal.App):
                 await send_error("ice_failed", exc)
                 return False
 
-        async def handle_action(payload):
-            print(f"WebRTC: received action {payload.get('action')}")
+        async def handle_action(payload: dict) -> bool:
             await action_queue.put(payload)
             return True
 
-        async def handle_pause(payload):
-            print(f"WebRTC: received pause {payload.get('paused')}")
+        async def handle_pause(payload: dict) -> bool:
             if payload.get("paused", False):
                 resume_event.clear()
             else:
@@ -377,7 +575,7 @@ class MatrixGame2(fal.App):
             await send({"type": "pause", "paused": not resume_event.is_set()})
             return True
 
-        async def handle_payload(payload):
+        async def handle_payload(payload: object) -> bool:
             if isinstance(payload, dict):
                 msg_type = payload.get("type")
                 if msg_type == "offer":
@@ -388,7 +586,6 @@ class MatrixGame2(fal.App):
                     return await handle_action(payload)
                 if msg_type == "pause":
                     return await handle_pause(payload)
-            print(f"WebRTC: received raw payload {payload}")
             await action_queue.put(payload)
             return True
 
@@ -407,6 +604,7 @@ class MatrixGame2(fal.App):
         input_task: asyncio.Task | None = None
         try:
             await outgoing.put({"type": "ready"})
+            await outgoing.put({"type": "iceServers", "iceServers": signal_ice_servers})
             input_task = asyncio.create_task(input_loop())
             while True:
                 payload = await outgoing.get()
@@ -423,4 +621,16 @@ class MatrixGame2(fal.App):
             producer_task.cancel()
             with suppress(asyncio.CancelledError):
                 await producer_task
+            reset_stream()
+            with suppress(Exception):
+                render_executor.shutdown(wait=False, cancel_futures=True)
             await pc.close()
+
+
+if __name__ == "__main__":
+    from matrix2_client import run
+
+    info = MatrixWebRTC2.spawn()
+    print(f"App ID: {info.application}")
+    info.wait()
+    run(endpoint=info.application + "/realtime")
