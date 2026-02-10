@@ -1,9 +1,66 @@
 import asyncio
 from contextlib import suppress
-from typing import AsyncIterator
+from typing import Annotated, AsyncIterator, Literal
 
 import fal
 from fastapi import WebSocketDisconnect
+from pydantic import BaseModel, Field, RootModel, TypeAdapter, ValidationError
+
+
+class IceCandidate(BaseModel):
+    candidate: str
+    sdpMid: str | None = None
+    sdpMLineIndex: int | None = None
+
+
+class OfferInput(BaseModel):
+    type: Literal["offer"]
+    sdp: str
+
+
+class IceCandidateInput(BaseModel):
+    type: Literal["icecandidate"]
+    candidate: IceCandidate | None = None
+
+
+RealtimeInputMessage = Annotated[
+    OfferInput | IceCandidateInput,
+    Field(discriminator="type"),
+]
+
+
+class RealtimeInput(RootModel):
+    root: RealtimeInputMessage
+
+
+class IceServersOutput(BaseModel):
+    type: Literal["iceservers"]
+    iceservers: list[dict]
+
+
+class AnswerOutput(BaseModel):
+    type: Literal["answer"]
+    sdp: str
+
+
+class IceCandidateOutput(BaseModel):
+    type: Literal["icecandidate"]
+    candidate: IceCandidate | None = None
+
+
+class ErrorOutput(BaseModel):
+    type: Literal["error"]
+    error: str
+
+
+RealtimeOutputMessage = Annotated[
+    IceServersOutput | AnswerOutput | IceCandidateOutput | ErrorOutput,
+    Field(discriminator="type"),
+]
+
+
+class RealtimeOutput(RootModel):
+    root: RealtimeOutputMessage
 
 
 class WebcamWebRtc(fal.App):
@@ -14,6 +71,7 @@ class WebcamWebRtc(fal.App):
         "av",
         "numpy",
         "opencv-python",
+        "pydantic",
         "ultralytics",
     ]
 
@@ -102,7 +160,9 @@ class WebcamWebRtc(fal.App):
         return servers
 
     @fal.realtime("/realtime", buffering=5)
-    async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
+    async def webrtc(
+        self, inputs: AsyncIterator[RealtimeInput]
+    ) -> AsyncIterator[RealtimeOutput]:
         from aiortc import (
             RTCConfiguration,
             RTCIceServer,
@@ -126,27 +186,35 @@ class WebcamWebRtc(fal.App):
         )
         blackhole = MediaBlackhole()
         stop_event = asyncio.Event()
-        outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
+        outgoing: asyncio.Queue[RealtimeOutput | None] = asyncio.Queue()
+        input_adapter = TypeAdapter(RealtimeInputMessage)
 
-        async def send(payload: dict) -> None:
+        async def send(payload: RealtimeOutputMessage) -> None:
             if stop_event.is_set():
                 return
-            await outgoing.put(payload)
+            await outgoing.put(RealtimeOutput(root=payload))
+
+        async def send_error(prefix: str, exc: Exception) -> None:
+            await send(
+                ErrorOutput(type="error", error=f"{prefix}:{type(exc).__name__}:{exc}")
+            )
+            stop_event.set()
+            await outgoing.put(None)
 
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate is None:
-                await send({"type": "icecandidate", "candidate": None})
+                await send(IceCandidateOutput(type="icecandidate", candidate=None))
                 return
             await send(
-                {
-                    "type": "icecandidate",
-                    "candidate": {
-                        "candidate": candidate.candidate,
-                        "sdpMid": candidate.sdpMid,
-                        "sdpMLineIndex": candidate.sdpMLineIndex,
-                    },
-                }
+                IceCandidateOutput(
+                    type="icecandidate",
+                    candidate=IceCandidate(
+                        candidate=candidate.candidate,
+                        sdpMid=candidate.sdpMid,
+                        sdpMLineIndex=candidate.sdpMLineIndex,
+                    ),
+                )
             )
 
         @pc.on("connectionstatechange")
@@ -162,32 +230,38 @@ class WebcamWebRtc(fal.App):
             else:
                 asyncio.ensure_future(blackhole.consume(track))
 
-        async def handle_offer(payload):
-            offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
-            await pc.setRemoteDescription(offer)
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            await send({"type": "answer", "sdp": pc.localDescription.sdp})
-            return True
-
-        async def handle_icecandidate(payload):
-            candidate = payload.get("candidate")
-            if candidate is None:
-                await pc.addIceCandidate(None)
+        async def handle_offer(payload: OfferInput) -> bool:
+            try:
+                offer = RTCSessionDescription(sdp=payload.sdp, type=payload.type)
+                await pc.setRemoteDescription(offer)
+                answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+                await send(AnswerOutput(type="answer", sdp=pc.localDescription.sdp))
                 return True
-            parsed = candidate_from_sdp(candidate.get("candidate", ""))
-            parsed.sdpMid = candidate.get("sdpMid")
-            parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
-            await pc.addIceCandidate(parsed)
-            return True
+            except Exception as exc:
+                await send_error("offer_failed", exc)
+                return False
 
-        async def handle_payload(payload):
-            if isinstance(payload, dict):
-                msg_type = payload.get("type")
-                if msg_type == "offer":
-                    return await handle_offer(payload)
-                if msg_type == "icecandidate":
-                    return await handle_icecandidate(payload)
+        async def handle_icecandidate(payload: IceCandidateInput) -> bool:
+            try:
+                candidate = payload.candidate
+                if candidate is None:
+                    await pc.addIceCandidate(None)
+                    return True
+                parsed = candidate_from_sdp(candidate.candidate)
+                parsed.sdpMid = candidate.sdpMid
+                parsed.sdpMLineIndex = candidate.sdpMLineIndex
+                await pc.addIceCandidate(parsed)
+                return True
+            except Exception as exc:
+                await send_error("ice_failed", exc)
+                return False
+
+        async def handle_payload(payload: RealtimeInputMessage) -> bool:
+            if isinstance(payload, OfferInput):
+                return await handle_offer(payload)
+            if isinstance(payload, IceCandidateInput):
+                return await handle_icecandidate(payload)
             return True
 
         async def input_loop() -> None:
@@ -195,7 +269,16 @@ class WebcamWebRtc(fal.App):
                 async for payload in inputs:
                     if stop_event.is_set():
                         break
-                    should_continue = await handle_payload(payload)
+                    try:
+                        parsed_payload = (
+                            payload.root
+                            if isinstance(payload, RealtimeInput)
+                            else input_adapter.validate_python(payload)
+                        )
+                    except ValidationError as exc:
+                        await send_error("invalid_payload", exc)
+                        break
+                    should_continue = await handle_payload(parsed_payload)
                     if not should_continue:
                         break
             finally:
@@ -204,7 +287,13 @@ class WebcamWebRtc(fal.App):
 
         input_task: asyncio.Task | None = None
         try:
-            await outgoing.put({"type": "iceservers", "iceservers": signal_ice_servers})
+            await outgoing.put(
+                RealtimeOutput(
+                    root=IceServersOutput(
+                        type="iceservers", iceservers=signal_ice_servers
+                    )
+                )
+            )
             input_task = asyncio.create_task(input_loop())
             while True:
                 payload = await outgoing.get()
