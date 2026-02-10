@@ -1,10 +1,14 @@
 import argparse
 import asyncio
-import json
 from contextlib import suppress
 
 import fal_client
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    RTCConfiguration,
+    RTCIceServer,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 from aiortc.sdp import candidate_from_sdp
 
 
@@ -23,55 +27,102 @@ async def forward_remote_frames(track, queue, stop_event):
         stop_event.set()
 
 
-async def render_frames(window_name, queue, stop_event, frame_shape=None):
-    import cv2
-    import numpy as np
-
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    placeholder = None
-    if frame_shape:
-        placeholder = np.zeros(frame_shape, dtype=np.uint8)
-
-    try:
-        while not stop_event.is_set():
-            try:
-                frame = await asyncio.wait_for(queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
-                frame = placeholder
-            if frame is None:
-                continue
-            cv2.imshow(window_name, frame)
-            key = cv2.waitKey(1)
-            if key == ord("q"):
-                stop_event.set()
-                break
-    except Exception as exc:
-        print(f"Window error ({window_name}): {exc}")
-    finally:
-        cv2.destroyWindow(window_name)
-
-
 def normalize_app_id(endpoint: str) -> str:
     normalized = endpoint.strip().strip("/")
     parts = [part for part in normalized.split("/") if part]
     if len(parts) < 2:
         raise ValueError(
-            f"Invalid endpoint '{endpoint}'. Use <owner>/<app> or <owner>/<app>/webrtc."
+            f"Invalid endpoint '{endpoint}'. Use <owner>/<app> or <owner>/<app>/realtime."
         )
     if parts[-1] in {"realtime", "webrtc"}:
         parts = parts[:-1]
     return "/".join(parts[:2])
 
 
+def parse_ice_servers(ice_servers_payload: object) -> list[RTCIceServer]:
+    if not isinstance(ice_servers_payload, list):
+        return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+    servers: list[RTCIceServer] = []
+    for item in ice_servers_payload:
+        if not isinstance(item, dict):
+            continue
+        urls = item.get("urls")
+        if not urls:
+            continue
+        servers.append(
+            RTCIceServer(
+                urls=urls,
+                username=item.get("username"),
+                credential=item.get("credential"),
+            )
+        )
+    if servers:
+        return servers
+    return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+
+def keycode_to_action(key_code: int) -> str | None:
+    if not (0 <= key_code < 256):
+        return None
+    key = chr(key_code).lower()
+    if key in {"w", "a", "s", "d"}:
+        return f"{key} u"
+    if key in {"i", "j", "k", "l"}:
+        return f"q {key}"
+    return None
+
+
+async def render_and_send_controls(
+    window_name: str,
+    queue: asyncio.Queue,
+    stop_event: asyncio.Event,
+    send_action,
+    send_pause,
+):
+    import cv2
+    import numpy as np
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    placeholder = np.zeros((352, 640, 3), dtype=np.uint8)
+    paused = False
+
+    try:
+        while not stop_event.is_set():
+            try:
+                frame = await asyncio.wait_for(queue.get(), timeout=0.03)
+            except asyncio.TimeoutError:
+                frame = placeholder
+
+            cv2.imshow(window_name, frame)
+            key_code = cv2.waitKeyEx(1)
+            if key_code in (ord("q"), ord("Q")):
+                stop_event.set()
+                break
+
+            if key_code == 32:  # Space
+                paused = not paused
+                await send_pause(paused)
+                print(f"Paused: {paused}")
+                continue
+
+            action = keycode_to_action(key_code)
+            if action:
+                await send_action(action)
+    except Exception as exc:
+        print(f"Window error ({window_name}): {exc}")
+    finally:
+        cv2.destroyWindow(window_name)
+
+
 async def run_webrtc(*, endpoint: str):
     client = fal_client.AsyncClient()
     stop_event = asyncio.Event()
-    paused = False
 
     app_id = normalize_app_id(endpoint)
     print(f"Connecting to realtime app {app_id}")
-    async with client.realtime(app_id, use_jwt=False) as connection:
-        pc = RTCPeerConnection()
+    async with client.realtime(app_id, path="/realtime", use_jwt=False) as connection:
+        pc: RTCPeerConnection | None = None
         remote_queue: asyncio.Queue[object] = asyncio.Queue(maxsize=1)
         remote_tasks: list[asyncio.Task] = []
 
@@ -81,99 +132,73 @@ async def run_webrtc(*, endpoint: str):
         async def rt_recv():
             return await connection.recv()
 
-        @pc.on("icecandidate")
-        async def on_icecandidate(candidate):
-            if candidate is None:
-                await rt_send({"type": "icecandidate", "candidate": None})
-                return
-            await rt_send(
-                {
-                    "type": "icecandidate",
-                    "candidate": {
-                        "candidate": candidate.candidate,
-                        "sdpMid": candidate.sdpMid,
-                        "sdpMLineIndex": candidate.sdpMLineIndex,
-                    },
-                }
+        async def send_action(action_text: str) -> None:
+            await rt_send({"type": "action", "action": action_text})
+
+        async def send_pause(paused: bool) -> None:
+            await rt_send({"type": "pause", "paused": paused})
+
+        def create_peer_connection(ice_servers_payload: object) -> RTCPeerConnection:
+            ice_servers = parse_ice_servers(ice_servers_payload)
+            print(f"Using {len(ice_servers)} ICE server entries from signaling.")
+            local_pc = RTCPeerConnection(
+                configuration=RTCConfiguration(iceServers=ice_servers)
             )
 
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            print(f"Connection state: {pc.connectionState}")
-            if pc.connectionState in ("failed", "closed", "disconnected"):
-                stop_event.set()
-
-        @pc.on("track")
-        def on_track(track):
-            if track.kind == "video":
-                print("Remote video track received.")
-                remote_tasks.append(
-                    asyncio.create_task(
-                        forward_remote_frames(track, remote_queue, stop_event)
-                    )
+            @local_pc.on("icecandidate")
+            async def on_icecandidate(candidate):
+                if candidate is None:
+                    await rt_send({"type": "icecandidate", "candidate": None})
+                    return
+                await rt_send(
+                    {
+                        "type": "icecandidate",
+                        "candidate": {
+                            "candidate": candidate.candidate,
+                            "sdpMid": candidate.sdpMid,
+                            "sdpMLineIndex": candidate.sdpMLineIndex,
+                        },
+                    }
                 )
 
-        pc.addTransceiver("video", direction="recvonly")
+            @local_pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                print(f"Connection state: {local_pc.connectionState}")
+                if local_pc.connectionState in ("failed", "closed", "disconnected"):
+                    stop_event.set()
+
+            @local_pc.on("track")
+            def on_track(track):
+                if track.kind == "video":
+                    print("Remote video track received.")
+                    remote_tasks.append(
+                        asyncio.create_task(
+                            forward_remote_frames(track, remote_queue, stop_event)
+                        )
+                    )
+
+            local_pc.addTransceiver("video", direction="recvonly")
+            return local_pc
 
         render_task = asyncio.create_task(
-            render_frames("Matrix output", remote_queue, stop_event)
+            render_and_send_controls(
+                "Matrix2 output (WASD move, IJKL look, Space pause)",
+                remote_queue,
+                stop_event,
+                send_action,
+                send_pause,
+            )
         )
 
-        async def command_loop():
-            nonlocal paused
-            print(
-                "Commands: w/a/s/d move, i/j/k/l look, pause, action <value>, "
-                "raw <json>, quit"
-            )
-            while not stop_event.is_set():
-                line = await asyncio.to_thread(input, "command> ")
-                if line is None:
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                lower = line.lower()
-                if lower in {"quit", "exit"}:
-                    stop_event.set()
-                    break
-                if lower == "pause":
-                    paused = not paused
-                    await rt_send({"type": "pause", "paused": paused})
-                    continue
-                if lower in {"w", "a", "s", "d"}:
-                    await rt_send({"type": "action", "action": f"{lower} u"})
-                    continue
-                if lower in {"i", "j", "k", "l"}:
-                    await rt_send({"type": "action", "action": f"q {lower}"})
-                    continue
-                if lower.startswith("action "):
-                    await rt_send({"type": "action", "action": line[7:].strip()})
-                    continue
-                if lower.startswith("raw "):
-                    raw = line[4:].strip()
-                    try:
-                        payload = json.loads(raw)
-                    except json.JSONDecodeError as exc:
-                        print(f"Invalid JSON: {exc}")
-                        continue
-                    await rt_send(payload)
-                    continue
-                print("Unknown command. Type 'quit' to exit.")
-
-        command_task = asyncio.create_task(command_loop())
-
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
-        await rt_send({"type": "action", "action": "q u"})
-        print("Sent offer. Waiting for answer...")
+        offer_sent = False
 
         async def shutdown_on_stop():
             await stop_event.wait()
             with suppress(Exception):
                 await connection.close()
-            with suppress(Exception):
-                await pc.close()
+            if pc is not None:
+                with suppress(Exception):
+                    await pc.close()
 
         shutdown_task = asyncio.create_task(shutdown_on_stop())
 
@@ -187,11 +212,19 @@ async def run_webrtc(*, endpoint: str):
                     print(f"WS message: {msg}")
                     continue
                 msg_type = msg.get("type")
-                if msg_type == "answer" and msg.get("sdp"):
+                if msg_type == "iceServers" and not offer_sent:
+                    pc = create_peer_connection(msg.get("iceServers"))
+                    offer = await pc.createOffer()
+                    await pc.setLocalDescription(offer)
+                    await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
+                    await send_action("q u")
+                    offer_sent = True
+                    print("Sent offer. Waiting for answer...")
+                elif msg_type == "answer" and msg.get("sdp") and pc is not None:
                     await pc.setRemoteDescription(
                         RTCSessionDescription(type="answer", sdp=msg["sdp"])
                     )
-                elif msg_type == "icecandidate":
+                elif msg_type == "icecandidate" and pc is not None:
                     candidate = msg.get("candidate")
                     if candidate is None:
                         await pc.addIceCandidate(None)
@@ -203,20 +236,19 @@ async def run_webrtc(*, endpoint: str):
                 elif msg_type == "ready":
                     print("Server ready.")
                 elif msg_type == "pause":
-                    paused = bool(msg.get("paused", paused))
-                    print(f"Paused: {paused}")
-                elif msg_type == "stream_exhausted":
-                    print("Stream exhausted.")
+                    print(f"Paused: {bool(msg.get('paused', False))}")
                 elif msg_type == "error":
                     print(f"Server error: {msg.get('error')}")
+                elif msg_type == "stream_exhausted":
+                    print("Stream exhausted.")
                 else:
                     print(f"WS message: {msg}")
         finally:
             stop_event.set()
             await connection.close()
-            await pc.close()
+            if pc is not None:
+                await pc.close()
             render_task.cancel()
-            command_task.cancel()
             shutdown_task.cancel()
             for task in remote_tasks:
                 task.cancel()
@@ -225,7 +257,7 @@ async def run_webrtc(*, endpoint: str):
 
 
 def run(*args, **kwargs):
-    print("Press 'q' in the output window or type 'quit' to stop.")
+    print("Focus the video window. WASD move, IJKL look, Space pause, q quits.")
     try:
         asyncio.run(run_webrtc(*args, **kwargs))
     except KeyboardInterrupt:
@@ -235,14 +267,14 @@ def run(*args, **kwargs):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Connect to Matrix WebRTC realtime endpoint."
+        description="Connect to Matrix2 WebRTC realtime endpoint."
     )
     parser.add_argument(
         "--endpoint",
-        help="Endpoint in the form <owner>/<app> or <owner>/<app>/webrtc",
+        required=True,
+        help="Endpoint in the form <owner>/<app> or <owner>/<app>/realtime",
     )
     args = parser.parse_args()
-
     run(endpoint=args.endpoint)
 
 

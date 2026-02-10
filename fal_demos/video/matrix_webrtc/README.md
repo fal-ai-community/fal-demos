@@ -24,7 +24,7 @@ FAL_KEY=myfalkey npm run dev
 ```
 
 Open the Vite dev server in your browser and set the Endpoint field to the
-full WebRTC endpoint (for example: `myuser/myapp/webrtc`).
+full WebRTC endpoint (for example: `myuser/myapp/realtime`).
 
 ## Game modes and seed image
 

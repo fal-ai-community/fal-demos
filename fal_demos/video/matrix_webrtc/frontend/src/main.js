@@ -1,6 +1,7 @@
 import { decode, encode } from "@msgpack/msgpack";
 
 const TOKEN_EXPIRATION_SECONDS = 120;
+const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 
 const appIdInput = document.getElementById("appId");
 const startBtn = document.getElementById("startBtn");
@@ -73,9 +74,9 @@ const stop = () => {
   setStatus("Disconnected");
 };
 
-const ensurePeer = async () => {
+const ensurePeer = async (iceServers) => {
   if (pc) return;
-  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  pc = new RTCPeerConnection({ iceServers });
 
   pc.onconnectionstatechange = () => {
     log(`Peer connection state: ${pc.connectionState}`);
@@ -104,9 +105,19 @@ const ensurePeer = async () => {
       ? event.streams[0]
       : new MediaStream([event.track]);
     remoteVideo.srcObject = stream;
+    // Helps some browsers begin playback immediately for remote tracks.
+    remoteVideo.play().catch(() => {});
   };
 
   pc.addTransceiver("video", { direction: "recvonly" });
+};
+
+const parseIceServers = (iceServersPayload) => {
+  if (!Array.isArray(iceServersPayload)) {
+    return DEFAULT_ICE_SERVERS;
+  }
+  const servers = iceServersPayload.filter((item) => item && item.urls);
+  return servers.length > 0 ? servers : DEFAULT_ICE_SERVERS;
 };
 
 const sendOffer = async () => {
@@ -178,10 +189,28 @@ startBtn.addEventListener("click", async () => {
   ws.onopen = async () => {
     setStatus("Connected");
     log("WebSocket open.");
-    await ensurePeer();
-    await sendOffer();
-    sendActionValue("q u");
     pauseBtn.disabled = false;
+  };
+
+  let pendingIceServers = DEFAULT_ICE_SERVERS;
+  let offerSent = false;
+  let negotiatingOffer = false;
+
+  const ensureOfferSent = async () => {
+    if (offerSent || negotiatingOffer) return;
+    negotiatingOffer = true;
+    offerSent = true;
+    try {
+      await ensurePeer(pendingIceServers);
+      await sendOffer();
+      sendActionValue("q u");
+      log("Sent offer. Waiting for answer...");
+    } catch (err) {
+      offerSent = false;
+      throw err;
+    } finally {
+      negotiatingOffer = false;
+    }
   };
 
   ws.onmessage = async (event) => {
@@ -191,9 +220,13 @@ startBtn.addEventListener("click", async () => {
       return;
     }
 
-    if (msg.type === "answer" && msg.sdp) {
+    if (msg.type === "iceServers" && !offerSent) {
+      pendingIceServers = parseIceServers(msg.iceServers);
+      log(`Using ${pendingIceServers.length} ICE server entries from signaling.`);
+      await ensureOfferSent();
+    } else if (msg.type === "answer" && msg.sdp && pc) {
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp }));
-    } else if (msg.type === "icecandidate") {
+    } else if (msg.type === "icecandidate" && pc) {
       const c = msg.candidate;
       if (c) {
         await pc.addIceCandidate(new RTCIceCandidate({
@@ -208,6 +241,10 @@ startBtn.addEventListener("click", async () => {
       log("Stream exhausted.");
     } else if (msg.type === "ready") {
       log("Server ready.");
+      if (!offerSent) {
+        log("No iceServers message yet, using default STUN fallback.");
+        await ensureOfferSent();
+      }
     } else if (msg.type === "pause") {
       paused = msg.paused;
       pauseBtn.textContent = paused ? "Resume (Space)" : "Pause (Space)";

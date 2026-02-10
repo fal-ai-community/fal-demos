@@ -6,7 +6,7 @@ const extractAlias = (appId = "") => {
   const normalized = String(appId).trim().replace(/^\/+|\/+$/g, "");
   const parts = normalized.split("/").filter(Boolean);
   if (parts.length < 2) {
-    throw new Error(`Invalid endpoint "${appId}". Use <owner>/<app>/webrtc.`);
+    throw new Error(`Invalid endpoint "${appId}". Use <owner>/<app>/realtime.`);
   }
   if (parts[parts.length - 1] === "webrtc" || parts[parts.length - 1] === "realtime") {
     parts.pop();
