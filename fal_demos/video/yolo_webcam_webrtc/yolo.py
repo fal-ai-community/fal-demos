@@ -8,6 +8,7 @@ from fastapi import WebSocketDisconnect
 
 class WebcamWebRtc(fal.App):
     machine_type = "GPU-H100"
+    TURN_EXPIRY_SECONDS = 600
     requirements = [
         "aiortc",
         "av",
@@ -17,18 +18,112 @@ class WebcamWebRtc(fal.App):
     ]
 
     def setup(self):
+        import os
+
         from ultralytics import YOLO
 
         model_path = "/data/yolov8n.pt"
         self.yolo_model = YOLO(model_path)
+        self._metered_secret_key = os.getenv("METERED_TURN_SECRET_KEY")
+        self._metered_label = os.getenv("METERED_TURN_LABEL")
+        required_env_vars = {
+            "METERED_TURN_SECRET_KEY": self._metered_secret_key,
+            "METERED_TURN_LABEL": self._metered_label,
+        }
+        missing_env_vars = [
+            key for key, value in required_env_vars.items() if not value
+        ]
+        if missing_env_vars:
+            missing = ", ".join(missing_env_vars)
+            raise RuntimeError(
+                f"Missing required Metered TURN env vars: {missing}. "
+                "Set them on the server before starting the realtime app."
+            )
 
-    @fal.realtime("/realtime")
+    def _build_ice_servers(self) -> list[dict]:
+        import json
+        import urllib.parse
+        import urllib.request
+
+        label = self._metered_label
+        secret_key = self._metered_secret_key
+        assert label is not None
+        assert secret_key is not None
+        credentials_url = f"https://{label}.metered.live/api/v1/turn/credentials"
+        credential_url = f"https://{label}.metered.live/api/v1/turn/credential"
+
+        def fetch_ice_servers(api_key: str) -> list[dict]:
+            query = urllib.parse.urlencode({"apiKey": api_key})
+            join_char = "&" if "?" in credentials_url else "?"
+            url = f"{credentials_url}{join_char}{query}"
+            with urllib.request.urlopen(url, timeout=5) as response:
+                payload = response.read().decode("utf-8")
+            raw_servers = json.loads(payload)
+            servers: list[dict] = []
+            for item in raw_servers:
+                urls = item.get("urls")
+                if not urls:
+                    continue
+                servers.append(
+                    {
+                        "urls": urls,
+                        "username": item.get("username"),
+                        "credential": item.get("credential", item.get("password")),
+                    }
+                )
+            return servers
+
+        query = urllib.parse.urlencode({"secretKey": secret_key})
+        join_char = "&" if "?" in credential_url else "?"
+        url = f"{credential_url}{join_char}{query}"
+        body = json.dumps(
+            {
+                "expiryInSeconds": self.TURN_EXPIRY_SECONDS,
+                "label": "fal-yolo-webrtc-demo",
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            url=url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+        credential_payload = json.loads(payload)
+        temporary_api_key = credential_payload.get("apiKey")
+        if not temporary_api_key:
+            raise RuntimeError("Metered credential response missing apiKey.")
+
+        servers = fetch_ice_servers(temporary_api_key)
+        if not servers:
+            raise RuntimeError("Metered returned empty ICE server list.")
+        print("WebRTC: using Metered secret-minted ICE servers")
+        return servers
+
+    @fal.realtime("/realtime", buffering=5)
     async def webrtc(self, inputs: AsyncIterator[dict]) -> AsyncIterator[dict]:
-        from aiortc import RTCPeerConnection, RTCSessionDescription
+        from aiortc import (
+            RTCConfiguration,
+            RTCIceServer,
+            RTCPeerConnection,
+            RTCSessionDescription,
+        )
         from aiortc.contrib.media import MediaBlackhole
         from aiortc.sdp import candidate_from_sdp
 
-        pc = RTCPeerConnection()
+        signal_ice_servers = self._build_ice_servers()
+        rtc_ice_servers = [
+            RTCIceServer(
+                urls=server["urls"],
+                username=server.get("username"),
+                credential=server.get("credential"),
+            )
+            for server in signal_ice_servers
+        ]
+        pc = RTCPeerConnection(
+            configuration=RTCConfiguration(iceServers=rtc_ice_servers)
+        )
         blackhole = MediaBlackhole()
         stop_event = asyncio.Event()
         outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
@@ -109,7 +204,7 @@ class WebcamWebRtc(fal.App):
 
         input_task: asyncio.Task | None = None
         try:
-            await outgoing.put({"type": "ready"})
+            await outgoing.put({"type": "iceservers", "iceservers": signal_ice_servers})
             input_task = asyncio.create_task(input_loop())
             while True:
                 payload = await outgoing.get()

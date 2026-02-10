@@ -603,8 +603,7 @@ class MatrixWebRTC2(fal.App):
 
         input_task: asyncio.Task | None = None
         try:
-            await outgoing.put({"type": "ready"})
-            await outgoing.put({"type": "iceServers", "iceServers": signal_ice_servers})
+            await outgoing.put({"type": "iceservers", "iceservers": signal_ice_servers})
             input_task = asyncio.create_task(input_loop())
             while True:
                 payload = await outgoing.get()

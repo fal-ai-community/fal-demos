@@ -220,8 +220,8 @@ startBtn.addEventListener("click", async () => {
       return;
     }
 
-    if (msg.type === "iceServers" && !offerSent) {
-      pendingIceServers = parseIceServers(msg.iceServers);
+    if (msg.type === "iceservers" && !offerSent) {
+      pendingIceServers = parseIceServers(msg.iceservers);
       log(`Using ${pendingIceServers.length} ICE server entries from signaling.`);
       await ensureOfferSent();
     } else if (msg.type === "answer" && msg.sdp && pc) {
@@ -239,12 +239,6 @@ startBtn.addEventListener("click", async () => {
       log(`Server error: ${msg.error}`);
     } else if (msg.type === "stream_exhausted") {
       log("Stream exhausted.");
-    } else if (msg.type === "ready") {
-      log("Server ready.");
-      if (!offerSent) {
-        log("No iceServers message yet, using default STUN fallback.");
-        await ensureOfferSent();
-      }
     } else if (msg.type === "pause") {
       paused = msg.paused;
       pauseBtn.textContent = paused ? "Resume (Space)" : "Pause (Space)";

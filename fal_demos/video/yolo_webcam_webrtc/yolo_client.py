@@ -3,7 +3,13 @@ import asyncio
 from contextlib import suppress
 
 import fal_client
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import (
+    RTCConfiguration,
+    RTCIceServer,
+    RTCPeerConnection,
+    RTCSessionDescription,
+    VideoStreamTrack,
+)
 from aiortc.sdp import candidate_from_sdp
 from av import VideoFrame
 
@@ -115,6 +121,29 @@ def normalize_app_id(endpoint: str) -> str:
     return "/".join(parts[:2])
 
 
+def parse_ice_servers(ice_servers_payload: object) -> list[RTCIceServer]:
+    if not isinstance(ice_servers_payload, list):
+        return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+    servers: list[RTCIceServer] = []
+    for item in ice_servers_payload:
+        if not isinstance(item, dict):
+            continue
+        urls = item.get("urls")
+        if not urls:
+            continue
+        servers.append(
+            RTCIceServer(
+                urls=urls,
+                username=item.get("username"),
+                credential=item.get("credential"),
+            )
+        )
+    if servers:
+        return servers
+    return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+
 async def run_webrtc(
     *,
     endpoint: str,
@@ -131,9 +160,10 @@ async def run_webrtc(
     print(f"Connecting to realtime app {app_id}")
     async with client.realtime(
         app_id,
+        path="/realtime",
         use_jwt=False,
     ) as connection:
-        pc = RTCPeerConnection()
+        pc: RTCPeerConnection | None = None
         local_preview_queue = None if no_preview else asyncio.Queue(maxsize=1)
         remote_queue = asyncio.Queue(maxsize=1)
         webcam = OpenCVCaptureTrack(
@@ -143,7 +173,6 @@ async def run_webrtc(
             fps=fps,
             preview_queue=local_preview_queue,
         )
-        pc.addTrack(webcam)
 
         async def rt_send(payload):
             await connection.send(payload)
@@ -151,35 +180,45 @@ async def run_webrtc(
         async def rt_recv():
             return await connection.recv()
 
-        @pc.on("icecandidate")
-        async def on_icecandidate(candidate):
-            if candidate is None:
-                await rt_send({"type": "icecandidate", "candidate": None})
-                return
-            await rt_send(
-                {
-                    "type": "icecandidate",
-                    "candidate": {
-                        "candidate": candidate.candidate,
-                        "sdpMid": candidate.sdpMid,
-                        "sdpMLineIndex": candidate.sdpMLineIndex,
-                    },
-                }
+        def create_peer_connection(ice_servers_payload: object) -> RTCPeerConnection:
+            ice_servers = parse_ice_servers(ice_servers_payload)
+            print(f"Using {len(ice_servers)} ICE server entries from signaling.")
+            local_pc = RTCPeerConnection(
+                configuration=RTCConfiguration(iceServers=ice_servers)
             )
+            local_pc.addTrack(webcam)
 
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            print(f"Connection state: {pc.connectionState}")
-            if pc.connectionState in ("failed", "closed", "disconnected"):
-                stop_event.set()
-
-        @pc.on("track")
-        def on_track(track):
-            if track.kind == "video":
-                print("Remote video track received.")
-                asyncio.create_task(
-                    forward_remote_frames(track, remote_queue, stop_event)
+            @local_pc.on("icecandidate")
+            async def on_icecandidate(candidate):
+                if candidate is None:
+                    await rt_send({"type": "icecandidate", "candidate": None})
+                    return
+                await rt_send(
+                    {
+                        "type": "icecandidate",
+                        "candidate": {
+                            "candidate": candidate.candidate,
+                            "sdpMid": candidate.sdpMid,
+                            "sdpMLineIndex": candidate.sdpMLineIndex,
+                        },
+                    }
                 )
+
+            @local_pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                print(f"Connection state: {local_pc.connectionState}")
+                if local_pc.connectionState in ("failed", "closed", "disconnected"):
+                    stop_event.set()
+
+            @local_pc.on("track")
+            def on_track(track):
+                if track.kind == "video":
+                    print("Remote video track received.")
+                    asyncio.create_task(
+                        forward_remote_frames(track, remote_queue, stop_event)
+                    )
+
+            return local_pc
 
         render_tasks = []
         if local_preview_queue is not None:
@@ -197,17 +236,15 @@ async def run_webrtc(
             asyncio.create_task(render_frames("YOLO output", remote_queue, stop_event))
         )
 
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
-        print("Sent offer. Waiting for answer...")
+        offer_sent = False
 
         async def shutdown_on_stop():
             await stop_event.wait()
             with suppress(Exception):
                 await connection.close()
-            with suppress(Exception):
-                await pc.close()
+            if pc is not None:
+                with suppress(Exception):
+                    await pc.close()
             with suppress(Exception):
                 webcam.stop()
 
@@ -224,10 +261,21 @@ async def run_webrtc(
                     continue
                 msg_type = msg.get("type")
                 if msg_type == "answer" and msg.get("sdp"):
+                    if pc is None:
+                        continue
                     await pc.setRemoteDescription(
                         RTCSessionDescription(type="answer", sdp=msg["sdp"])
                     )
+                elif msg_type == "iceservers" and not offer_sent:
+                    pc = create_peer_connection(msg.get("iceservers"))
+                    offer = await pc.createOffer()
+                    await pc.setLocalDescription(offer)
+                    await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
+                    offer_sent = True
+                    print("Sent offer. Waiting for answer...")
                 elif msg_type == "icecandidate":
+                    if pc is None:
+                        continue
                     candidate = msg.get("candidate")
                     if candidate is None:
                         await pc.addIceCandidate(None)
@@ -236,8 +284,6 @@ async def run_webrtc(
                     parsed.sdpMid = candidate.get("sdpMid")
                     parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
                     await pc.addIceCandidate(parsed)
-                elif msg_type == "ready":
-                    print("Server ready.")
                 elif msg_type == "error":
                     print(f"Server error: {msg.get('error')}")
                 else:
@@ -245,7 +291,8 @@ async def run_webrtc(
         finally:
             stop_event.set()
             await connection.close()
-            await pc.close()
+            if pc is not None:
+                await pc.close()
             webcam.stop()
             for task in render_tasks:
                 task.cancel()

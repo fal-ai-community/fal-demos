@@ -6,6 +6,8 @@ annotated stream back.
 ## Run the backend
 
 Use `fal run` for local dev or `fal deploy` for a hosted endpoint.
+This demo requires Metered TURN credentials via environment variables:
+`METERED_TURN_SECRET_KEY` and `METERED_TURN_LABEL`.
 
 ```bash
 fal run yolo.py
