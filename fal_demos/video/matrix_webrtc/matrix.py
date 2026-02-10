@@ -214,26 +214,38 @@ class MatrixWebRTC2(fal.App):
             raise RuntimeError(f"Seed image not found at {self._seed_path}")
 
         self._session_lock = threading.RLock()
-        self._session = self._build_session(mode=self._mode)
         self._last_seed_key: str | None = None
 
-        # Warmup one streaming block so first remote frame appears sooner.
-        self._prepare_session(force=True)
-        with self._session_lock:
+        print("Warming up temporary session")
+        warmup_session = None
+        warmup_stream = None
+        generated_frames = 0
+        generated_blocks = 0
+        try:
+            warmup_session = self._build_session(mode=self._mode)
+            warmup_session.prepare(str(self._seed_path), mode=self._mode)
 
             def action_provider(current_start_frame, num_frame_per_block, action_mode):
                 return "q u"
 
-            warmup_stream = self._session.stream_frames(action_provider)
-            try:
-                next(warmup_stream)
-            except StopIteration:
-                pass
-            finally:
-                close_stream = getattr(warmup_stream, "close", None)
-                if callable(close_stream):
-                    with suppress(Exception):
-                        close_stream()
+            warmup_stream = warmup_session.stream_frames(action_provider)
+            while True:
+                block = next(warmup_stream)
+                generated_frames += len(block)
+                generated_blocks += 1
+        except StopIteration:
+            print(
+                "Warmup complete: "
+                f"{generated_frames} frames across {generated_blocks} blocks"
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Warmup failed: {exc}") from exc
+        finally:
+            if warmup_stream is not None:
+                with suppress(Exception):
+                    warmup_stream.close()
+
+        self._session = self._build_session(mode=self._mode)
 
     def _build_ice_servers(self) -> list[dict]:
         import json
@@ -570,19 +582,10 @@ class MatrixWebRTC2(fal.App):
 
                 try:
                     started = time.perf_counter()
-                    block = await asyncio.wait_for(
-                        asyncio.shield(
-                            asyncio.create_task(render_block_async(action_value))
-                        ),
-                        timeout=20.0,
-                    )
+                    block = await render_block_async(action_value)
                     dt = time.perf_counter() - started
                     if dt > 0.5:
                         print(f"WebRTC: generated block in {dt:.2f}s")
-                except asyncio.TimeoutError:
-                    print("WebRTC: generation timed out, resetting stream")
-                    reset_stream()
-                    continue
                 except Exception as exc:
                     await send_error("frame_failed", exc)
                     break
