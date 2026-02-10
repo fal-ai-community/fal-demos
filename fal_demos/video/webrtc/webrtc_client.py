@@ -204,8 +204,8 @@ async def run_webrtc(*, endpoint: str):
                     print(f"WS message: {msg}")
                     continue
                 msg_type = msg.get("type")
-                if msg_type == "iceServers" and not offer_sent:
-                    pc = create_peer_connection(msg.get("iceServers"))
+                if msg_type == "iceservers" and not offer_sent:
+                    pc = create_peer_connection(msg.get("iceservers"))
                     offer = await pc.createOffer()
                     await pc.setLocalDescription(offer)
                     await rt_send({"type": "offer", "sdp": pc.localDescription.sdp})
@@ -224,8 +224,6 @@ async def run_webrtc(*, endpoint: str):
                     parsed.sdpMid = candidate.get("sdpMid")
                     parsed.sdpMLineIndex = candidate.get("sdpMLineIndex")
                     await pc.addIceCandidate(parsed)
-                elif msg_type == "ready":
-                    print("Server ready.")
                 elif msg_type == "action":
                     print(f"Server received key: {msg.get('action')}")
                 elif msg_type == "error":
