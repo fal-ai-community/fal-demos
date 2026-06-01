@@ -32,3 +32,20 @@ xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py
 # Distributed training examples
 flux-preprocessor = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp", no_scale=true }
 flux-training = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp", no_scale=true }
+
+# LLM examples
+[tool.fal.apps.vllm]
+auth = "private"
+machine_type = "GPU-H100"
+exposed_port = 8000
+
+[tool.fal.apps.vllm.image]
+dockerfile = "fal_demos/llm/vllm/Dockerfile"
+
+[tool.fal.apps.sglang]
+auth = "private"
+machine_type = "GPU-H100"
+exposed_port = 30000
+
+[tool.fal.apps.sglang.image]
+dockerfile = "fal_demos/llm/sglang/Dockerfile"
