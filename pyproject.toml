@@ -49,3 +49,11 @@ exposed_port = 30000
 
 [tool.fal.apps.sglang.image]
 dockerfile = "fal_demos/llm/sglang/Dockerfile"
+
+[tool.fal.apps.ollama]
+auth = "private"
+machine_type = "GPU-RTX5090"
+exposed_port = 11434
+
+[tool.fal.apps.ollama.image]
+image = "ollama/ollama"
