@@ -64,16 +64,7 @@ class ObjectOutput(BaseModel):
     )
 
 
-class Hunyuan3D(
-    fal.App,
-    name="hunyuan3d",
-    min_concurrency=0,
-    max_concurrency=1,
-    max_multiplexing=10,  # Multiplexing allows multiple requests to be handled by the same worker at the same time.
-):
-    machine_type = "M"
-    requirements = ["fal-client"]
-
+class Hunyuan3D(fal.App):
     def setup(self):
         # Get the secret key from the environment variable,
         # To set the secret key, run the following command:

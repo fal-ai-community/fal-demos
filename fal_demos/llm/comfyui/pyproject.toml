@@ -1,0 +1,8 @@
+[tool.fal.apps.comfyui]
+auth = "private"
+machine_type = "GPU-RTX5090"
+exposed_port = 18188
+
+[tool.fal.apps.comfyui.image]
+image = "ghcr.io/ai-dock/comfyui@sha256:fca2636bc177da48f25a546f0f55100b14ecb65ea26c674993370e549ba868c0"
+cmd = ["env", "COMFYUI_ARGS=--listen 0.0.0.0", "init.sh"]

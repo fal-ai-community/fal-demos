@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-birefnet-rmbg"
+version = "0.0.1"
+description = "Deploy BiRefNet RMBG on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic",
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "transformers==4.51.3",
+    "accelerate==1.6.0",
+    "safetensors==0.5.3",
+    "numpy==1.26.4",
+    "timm==1.0.15",
+    "kornia==0.8.0",
+    "einops==0.8.1",
+    "scipy==1.15.2",
+    "scikit-image==0.25.2",
+    "opencv-python-headless==4.11.0.86",
+    "prettytable==3.16.0",
+    "pillow==11.2.1",
+    "hf_transfer==0.1.9",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_birefnet_rmbg*"]
+
+[tool.fal.apps.birefnet-rmbg]
+python_entry_point = "fal_demo_birefnet_rmbg.app:BiRefNetRMBG"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-RTXPRO6000"
+min_concurrency = 0
+max_concurrency = 2
+keep_alive = 300

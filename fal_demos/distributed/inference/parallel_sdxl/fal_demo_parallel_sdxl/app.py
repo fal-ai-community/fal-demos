@@ -192,22 +192,6 @@ class ExampleResponse(BaseModel):
 
 
 class ExampleDistributedApp(fal.App):
-    machine_type = "GPU-H100"
-    num_gpus = 2
-    requirements = [
-        "accelerate==1.4.0",
-        "diffusers==0.30.3",
-        "fal",
-        "huggingface_hub==0.26.5",
-        "opencv-python",
-        "torch==2.6.0+cu124",
-        "torchvision==0.21.0+cu124",
-        "transformers==4.47.1",
-        "pyzmq==26.0.0",
-        "--extra-index-url",
-        "https://download.pytorch.org/whl/cu124",
-    ]
-
     async def setup(self) -> None:
         """
         On setup, create a distributed runner to run the model on multiple GPUs.

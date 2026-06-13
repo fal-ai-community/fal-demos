@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-ollama"
+version = "0.0.1"
+description = "Deploy Ollama on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.fal.apps.ollama]
+auth = "private"
+machine_type = "GPU-RTX5090"
+exposed_port = 11434
+
+[tool.fal.apps.ollama.image]
+image = "ollama/ollama"

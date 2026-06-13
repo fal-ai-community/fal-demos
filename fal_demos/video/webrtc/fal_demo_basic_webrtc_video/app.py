@@ -67,14 +67,7 @@ class RealtimeOutput(RootModel):
 
 
 class BasicWebRTCVideo(fal.App):
-    machine_type = "M"
     TURN_EXPIRY_SECONDS = 600
-    requirements = [
-        "aiortc",
-        "av",
-        "numpy",
-        "opencv-python>=4.9.0.80",
-    ]
 
     def setup(self):
         import os
@@ -459,7 +452,7 @@ class BasicWebRTCVideo(fal.App):
 
 
 if __name__ == "__main__":
-    from webrtc_client import run
+    from fal_demo_basic_webrtc_video.client import run
 
     info = BasicWebRTCVideo.spawn()
     print(f"App ID: {info.application}")

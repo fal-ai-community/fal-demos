@@ -10,13 +10,13 @@ This demo requires Metered TURN credentials via environment variables:
 `METERED_TURN_SECRET_KEY` and `METERED_TURN_LABEL`.
 
 ```bash
-fal run yolo.py
+fal run fal_demo_yolo_webcam_webrtc/app.py
 ```
 
 or
 
 ```bash
-fal deploy yolo.py
+fal deploy fal_demo_yolo_webcam_webrtc/app.py
 ```
 
 ## Run js client
@@ -35,7 +35,7 @@ Alternatively, you can run the python client that will open 2 OpenCV windows for
 the local webcam and the annotated stream.
 
 ```bash
-python yolo_client.py  --endpoints myuser/myapp/realtime
+python -m fal_demo_yolo_webcam_webrtc.client --endpoints myuser/myapp/realtime
 ```
 
 ## Model configuration

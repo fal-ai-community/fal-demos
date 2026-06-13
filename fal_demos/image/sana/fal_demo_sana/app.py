@@ -7,7 +7,7 @@ from fal.toolkit.image import ImageSizeInput, Image, ImageSize, get_image_size
 from fal.toolkit.image.safety_checker import postprocess_images
 from fastapi import Response
 from pydantic import Field, BaseModel
-from fal_demos.image.common import Output
+from fal_demo_sana.common import Output
 
 
 # The input model for the inference request, make sure to set the title and description for each field
@@ -126,33 +126,7 @@ class SanaSprintOutput(Output):
     )
 
 
-class Sana(
-    fal.App,
-    keep_alive=600,  # The worker will be kept alive for 10 minutes after the last request
-    min_concurrency=0,  # The minimum number of concurrent workers to keep alive, if set to 0, the app will startup when the first request is received
-    max_concurrency=10,  # The maximum number of concurrent workers to acquire, it helps limit the number of concurrent requests to the app
-    name="sana",  # set the app name, the endpoint will be served at username/sana
-):
-    """
-    Specify requirements as follows and make sure to pin the versions of packages and commit hashes to ensure reliability.
-    """
-
-    requirements = [
-        "torch==2.6.0",
-        "accelerate==1.6.0",
-        "transformers==4.51.3",
-        "git+https://github.com/huggingface/diffusers.git@f4fa3beee7f49b80ce7a58f9c8002f43299175c9",
-        "hf_transfer==0.1.9",
-        "peft==0.15.0",
-        "sentencepiece==0.2.0",
-        "--extra-index-url",
-        "https://download.pytorch.org/whl/cu124",
-    ]
-    local_python_modules = [
-        "fal_demos",
-    ]
-    machine_type = "GPU-H100"  # Choose machine type from https://docs.fal.ai/private-serverless-models/resources/
-
+class Sana(fal.App):
     def setup(self):
         """
         This method is called once when the app is started. Use it to load your model and cache it for all requests.
@@ -257,7 +231,7 @@ class Sana(
         return await self._generate(input, response, "sprint")
 
 
-# Run the app with fal run fal_demos/image/sana.py::Sana
+# Run the app with fal run fal_demo_sana/app.py::Sana from this directory.
 # or fal run sana (needs to be defined in the pyproject.toml inside the tool.fal.apps section)
 
 # The app will be served on an ephemeral URL, example: https://fal.ai/dashboard/sdk/fal-ai/9fe9b6fc-534d-4926-95b1-87b7f15a67de

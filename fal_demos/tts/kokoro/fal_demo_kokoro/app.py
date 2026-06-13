@@ -140,24 +140,7 @@ class JapaneseOutput(BaseModel):
     )
 
 
-class Kokoro(
-    fal.App,
-    min_concurrency=0,  # type: ignore
-    max_concurrency=1,  # type: ignore
-    keep_alive=3000,  # type: ignore
-    name="kokoro",  # type: ignore
-):
-    requirements = [
-        "kokoro==0.8.4",
-        "soundfile==0.13.1",
-        "misaki[en]==0.8.4",
-        "misaki[ja]==0.8.4",
-        "misaki[zh]==0.8.4",
-        "numpy==1.26.4",
-        "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
-    ]
-    machine_type = "L"  # Use a CPU machine type since Kokoro is only 82M parameters and runs efficiently on CPU
-
+class Kokoro(fal.App):
     async def setup(self):
         from kokoro import KPipeline
 

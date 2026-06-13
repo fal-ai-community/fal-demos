@@ -33,10 +33,7 @@ class GenerateResponse(BaseModel):
     message: str = Field(description="Status message")
 
 
-class XFuserApp(
-    fal.App,
-    keep_alive=300,
-):
+class XFuserApp(fal.App):
     """
     Fal app that runs xFuser for distributed image generation.
 
@@ -62,28 +59,6 @@ class XFuserApp(
     Note: For SD3 Medium, using pure PipeFusion (pipefusion=num_gpus) gives best scaling.
           Keep ulysses=1 and cfg=False for optimal performance.
     """
-
-    num_gpus = 2  # Optimized for cost/performance ratio
-    machine_type = "GPU-H100"
-
-    requirements = [
-        "torch>=2.6.0",
-        "torchvision>=0.21.0",
-        "diffusers>=0.28.2",
-        "transformers>=4.47.2,<4.52.0",
-        "accelerate>=1.4.0",
-        "pyzmq>=25.0.0",
-        "ray>=2.0.0",
-        "Pillow>=9.0.0",
-        "opencv-python>=4.9.0.80",
-        "fastapi>=0.100.0",
-        "httpx>=0.24.0",
-        "pydantic>=1.8,<2.0",  # Locked by Fal platform
-        "uvicorn>=0.20.0",
-        "xfuser>=0.3.0",
-        "sentencepiece",
-        "protobuf",
-    ]
 
     async def setup(self) -> None:
         """

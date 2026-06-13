@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-diffrhythm"
+version = "0.0.1"
+description = "Deploy DiffRhythm on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic==2.10.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_diffrhythm*"]
+
+[tool.fal.apps.diffrhythm]
+python_entry_point = "fal_demo_diffrhythm.app:DiffRhythm"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-H100"
+keep_alive = 600
+min_concurrency = 1
+max_concurrency = 2
+
+[tool.fal.apps.diffrhythm.image]
+dockerfile = "Dockerfile"

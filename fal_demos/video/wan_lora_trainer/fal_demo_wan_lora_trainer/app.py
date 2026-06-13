@@ -28,7 +28,6 @@ VIDEO_CLIP_MODE_TYPE = Literal[
 SIZE_BUCKET_TYPE = tuple[int, int, int]
 
 APP_NAME = "wan-lora-trainer-demo"
-MACHINE_TYPE = "GPU-H100"
 NUM_GPUS = 1
 ALLOWED_MEDIA_FILES = [".png", ".jpg", ".jpeg", ".gif", ".mp4"]
 
@@ -61,38 +60,6 @@ MODEL_REVISIONS: dict[MODEL_TYPE, str] = {
 }
 SHARED_MODEL_REPO_ID = "Wan-AI/Wan2.1-I2V-14B-720P"
 SHARED_MODEL_REVISION = "8823af45fcc58a8aa999a54b04be9abc7d2aac98"
-
-DEPENDENCIES = [
-    "accelerate==1.4.0",
-    "av==14.2.0",
-    "bitsandbytes==0.45.3",
-    "datasets==3.3.2",
-    "deepspeed==0.14.5",
-    "diffusers==0.32.2",
-    "easydict==1.13",
-    "einops==0.8.1",
-    "ftfy==6.3.1",
-    "flash-attn@https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl",
-    "imageio==2.37.0",
-    "imageio-ffmpeg==0.6.0",
-    "omegaconf==2.3.0",
-    "peft==0.14.0",
-    "pillow==10.4.0",
-    "protobuf==6.31.1",
-    "psutil==7.0.0",
-    "safetensors==0.5.3",
-    "sentencepiece==0.2.0",
-    "tensorboard==2.19.0",
-    "termcolor==2.5.0",
-    "toml==0.10.2",
-    "torch==2.6.0",
-    "torch-optimi==0.2.1",
-    "torchvision==0.21.0",
-    "tqdm==4.67.1",
-    "transformers==4.49.0",
-    "triton==3.2.0",
-    "wandb",
-]
 
 DATASET_CONFIG_TEMPLATE = """
 size_buckets = [{size_buckets:s}]
@@ -727,17 +694,7 @@ def train(
         shutil.rmtree(DATASET_DIR)
 
 
-class WanLoRATrainerDemo(
-    fal.App,
-    keep_alive=0,
-    request_timeout=43200,
-    name=APP_NAME,
-    _scheduler_options={"region": ["us-central", "us-west", "us-east", "eu-north"]},
-):  # type: ignore
-    machine_type = MACHINE_TYPE
-    num_gpus = NUM_GPUS
-    requirements = DEPENDENCIES
-
+class WanLoRATrainerDemo(fal.App):
     repo_dir: Path
 
     def setup(self) -> None:

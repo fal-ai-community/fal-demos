@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-xfuser"
+version = "0.0.1"
+description = "Deploy xFuser distributed inference on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic>=1.8,<2.0",  # Locked by Fal platform
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "diffusers>=0.28.2",
+    "transformers>=4.47.2,<4.52.0",
+    "accelerate>=1.4.0",
+    "pyzmq>=25.0.0",
+    "ray>=2.0.0",
+    "Pillow>=9.0.0",
+    "opencv-python>=4.9.0.80",
+    "httpx>=0.24.0",
+    "uvicorn>=0.20.0",
+    "xfuser>=0.3.0",
+    "sentencepiece",
+    "protobuf",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_xfuser*"]
+
+[tool.fal.apps.xfuser]
+python_entry_point = "fal_demo_xfuser.app:XFuserApp"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-H100"
+# Optimized for cost/performance ratio.
+num_gpus = 2
+keep_alive = 300

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-hunyuan3d"
+version = "0.0.1"
+description = "Deploy Hunyuan3D on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "fal-client",
+    "httpx",
+    "pydantic",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_hunyuan3d*"]
+
+[tool.fal.apps.hunyuan3d]
+python_entry_point = "fal_demo_hunyuan3d.app:Hunyuan3D"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "M"
+min_concurrency = 0
+max_concurrency = 1
+# Multiplexing allows multiple requests to be handled by the same worker at the same time.
+max_multiplexing = 10

@@ -16,9 +16,7 @@ from fal.toolkit import File, download_file
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from fal_demos.distributed.training.flux_lora.trainer.training_worker import (
-    FluxLoRATrainingWorker,
-)
+from fal_demo_flux_training.training_worker import FluxLoRATrainingWorker
 
 
 class CompleteTrainingRequest(BaseModel):
@@ -118,26 +116,6 @@ class FluxLoRATrainingApp(fal.App):
     - Clean separation of concerns
     - Can scale independently
     """
-
-    machine_type = "GPU-H100"
-    num_gpus = 2
-    keep_alive = 3000
-    min_concurrency = 1
-    max_concurrency = 1
-
-    requirements = [
-        "torch==2.4.0",
-        "diffusers==0.30.3",
-        "transformers==4.46.0",
-        "tokenizers==0.20.1",
-        "sentencepiece",
-        "peft==0.12.0",
-        "safetensors==0.4.4",
-        "accelerate==1.4.0",
-        "pyzmq==26.0.0",
-        "huggingface_hub==0.26.5",
-        "fal-client",  # For calling preprocessor app
-    ]
 
     async def setup(self) -> None:
         """

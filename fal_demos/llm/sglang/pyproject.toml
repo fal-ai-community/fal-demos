@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-sglang"
+version = "0.0.1"
+description = "Deploy SGLang on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.fal.apps.sglang]
+auth = "private"
+machine_type = "GPU-H100"
+exposed_port = 30000
+
+[tool.fal.apps.sglang.image]
+dockerfile = "Dockerfile"
