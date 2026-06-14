@@ -7,6 +7,8 @@ import fal
 from fal.toolkit import File, Image, clone_repository
 from pydantic import BaseModel, Field
 
+NUM_GPUS = 2
+
 
 class GenerateRequest(BaseModel):
     """Request model for image generation using xFuser."""
@@ -99,7 +101,7 @@ class XFuserApp(fal.App):
         model_path = os.environ.get(
             "MODEL_PATH", "stabilityai/stable-diffusion-3-medium-diffusers"
         )
-        world_size = self.num_gpus
+        world_size = NUM_GPUS
 
         # Optimal parallelism for SD3 Medium:
         # For 2 GPUs: Use PipeFusion=2 for best efficiency (~1.6-1.8x speedup)

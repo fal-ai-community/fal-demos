@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     import torch
     from PIL import Image as PILImage
 
+NUM_GPUS = 2
+
 # Helper function
 
 
@@ -198,7 +200,7 @@ class ExampleDistributedApp(fal.App):
         """
         self.runner = DistributedRunner(
             worker_cls=ExampleDistributedWorker,
-            world_size=self.num_gpus,
+            world_size=NUM_GPUS,
         )
         # Start and wait for ready
         await self.runner.start()

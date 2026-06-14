@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 
 from fal_demo_flux_preprocessor.preprocessor_worker import FluxPreprocessorWorker
 
+NUM_GPUS = 2
+
 
 class PreprocessRequest(BaseModel):
     """Request model for preprocessing"""
@@ -64,7 +66,7 @@ class FluxPreprocessorApp(fal.App):
         """
         Initialize the preprocessing runner.
 
-        Downloads Flux weights and starts 8 GPU workers for preprocessing.
+        Downloads Flux weights and starts the configured GPU workers for preprocessing.
         """
         import os
         from huggingface_hub import snapshot_download
@@ -82,11 +84,11 @@ class FluxPreprocessorApp(fal.App):
         # Create preprocessing runner
         self.runner = DistributedRunner(
             worker_cls=FluxPreprocessorWorker,
-            world_size=self.num_gpus,
+            world_size=NUM_GPUS,
         )
 
         # Start workers
-        print(f"Starting {self.num_gpus} preprocessing workers...")
+        print(f"Starting {NUM_GPUS} preprocessing workers...")
         await self.runner.start(model_path=model_path)
 
         print("Preprocessing workers ready!")
@@ -124,7 +126,7 @@ class FluxPreprocessorApp(fal.App):
 
             # Preprocess in parallel across all GPUs
             print(
-                f"Preprocessing with {self.num_gpus} GPUs (request_id: {request_id})..."
+                f"Preprocessing with {NUM_GPUS} GPUs (request_id: {request_id})..."
             )
             result = await self.runner.invoke(
                 {
