@@ -2,8 +2,8 @@
 Flux LoRA Training App - Calls Separate Preprocessor
 
 Architecture:
-- This app handles TRAINING only (configured GPUs with DDP)
-- Calls flux-preprocessor-demo app for preprocessing (runs on separate configured GPUs)
+- This app handles TRAINING only (8 GPUs with DDP)
+- Calls flux-preprocessor-demo app for preprocessing (runs on separate 8 GPUs)
 - Both apps stay warm, no reload overhead
 - Clean separation of concerns
 """
@@ -109,7 +109,7 @@ class FluxLoRATrainingApp(fal.App):
     """
     Flux LoRA Training App using DistributedRunner.
 
-    This app focuses on TRAINING only and uses the configured GPUs with DDP.
+    This app focuses on TRAINING only and uses 8 GPUs with DDP.
     For preprocessing, it calls the flux-preprocessor-demo app.
 
     Benefits:
@@ -123,7 +123,7 @@ class FluxLoRATrainingApp(fal.App):
         """
         Initialize the training runner.
 
-        Downloads Flux weights and starts the configured GPU workers for training.
+        Downloads Flux weights and starts 8 GPU workers for training.
         Preprocessing is handled by calling a separate app.
         """
         import os
@@ -139,7 +139,7 @@ class FluxLoRATrainingApp(fal.App):
         )
         print(f"Model downloaded to {model_path}")
 
-        # Create training runner for the configured GPU count
+        # Create training runner (uses all 8 GPUs)
         self.runner = DistributedRunner(
             worker_cls=FluxLoRATrainingWorker,
             world_size=NUM_GPUS,
@@ -160,9 +160,9 @@ class FluxLoRATrainingApp(fal.App):
         Complete training pipeline: raw images → trained LoRA.
 
         This endpoint:
-        1. Calls flux-preprocessor-demo app (runs on separate configured GPUs)
+        1. Calls flux-preprocessor-demo app (runs on separate 8 GPUs)
         2. Downloads preprocessed data
-        3. Trains LoRA on the configured GPUs
+        3. Trains LoRA on our 8 GPUs
         4. Returns checkpoint
 
         Both apps stay warm, so no model reload overhead!
@@ -170,7 +170,7 @@ class FluxLoRATrainingApp(fal.App):
         import fal_client
         import tempfile
 
-        # Step 1: Call preprocessor app (runs on a separate configured instance)
+        # Step 1: Call preprocessor app (runs on separate instance with 8 GPUs)
         print(f"Calling preprocessor app: {request.preprocessor_app}")
         print(f"Preprocessing {request.images_data_url}...")
 
@@ -201,7 +201,7 @@ class FluxLoRATrainingApp(fal.App):
                 download_file(preprocessed_data_url, target_dir=temp_dir)
             )
 
-            # Step 3: Train LoRA on the configured GPUs
+            # Step 3: Train LoRA (on our 8 GPUs)
             print(f"Training LoRA with {NUM_GPUS} GPUs...")
             train_result = await self.runner.invoke(
                 {
@@ -250,7 +250,7 @@ class FluxLoRATrainingApp(fal.App):
         import fal_client
         import tempfile
 
-        # Step 1: Call preprocessor app (runs on a separate configured instance)
+        # Step 1: Call preprocessor app (runs on separate instance with 8 GPUs)
         print(f"Calling preprocessor app: {request.preprocessor_app}")
         print(f"Preprocessing {request.images_data_url}...")
 
@@ -282,7 +282,7 @@ class FluxLoRATrainingApp(fal.App):
                     download_file(preprocessed_data_url, target_dir=temp_dir)
                 )
 
-                # Step 3: Train LoRA with streaming on the configured GPUs
+                # Step 3: Train LoRA with streaming (on our GPUs)
                 print(f"Training LoRA with {NUM_GPUS} GPUs (streaming)...")
                 async for event in self.runner.stream(
                     {
@@ -326,7 +326,7 @@ class FluxLoRATrainingApp(fal.App):
                 download_file(request.training_data_url.url, target_dir=temp_dir)
             )
 
-            # Train on the configured GPUs
+            # Train on our 8 GPUs
             print(f"Training with {NUM_GPUS} GPUs...")
             result = await self.runner.invoke(
                 {

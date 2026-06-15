@@ -66,7 +66,7 @@ class FluxPreprocessorApp(fal.App):
         """
         Initialize the preprocessing runner.
 
-        Downloads Flux weights and starts the configured GPU workers for preprocessing.
+        Downloads Flux weights and starts 8 GPU workers for preprocessing.
         """
         import os
         from huggingface_hub import snapshot_download
