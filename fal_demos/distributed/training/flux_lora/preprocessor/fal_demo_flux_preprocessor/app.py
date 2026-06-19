@@ -125,9 +125,7 @@ class FluxPreprocessorApp(fal.App):
             request_id = str(int(time.time() * 1000000))  # Microsecond timestamp
 
             # Preprocess in parallel across all GPUs
-            print(
-                f"Preprocessing with {NUM_GPUS} GPUs (request_id: {request_id})..."
-            )
+            print(f"Preprocessing with {NUM_GPUS} GPUs (request_id: {request_id})...")
             result = await self.runner.invoke(
                 {
                     "images_zip_url": images_zip_path,
