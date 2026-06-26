@@ -53,7 +53,7 @@ The comments at the end of the file ([`fal_demos/image/sana.py#L214-L219`](fal_d
 
 ### 1.1 ComfyUI
 
-The [`fal_demos/image/comfyui/Dockerfile`](fal_demos/image/comfyui/Dockerfile) demo hosts the ComfyUI web/API server as a private container app. It exposes port `8188`, uses a CUDA PyTorch base image, installs the ComfyUI runtime dependencies, and starts `main.py` with `--listen 0.0.0.0` so fal can route traffic to the UI and API.
+The [`fal_demos/comfyui/Dockerfile`](fal_demos/comfyui/Dockerfile) demo hosts the ComfyUI web/API server as a private container app. It exposes port `8188`, uses a CUDA PyTorch base image, installs the ComfyUI runtime dependencies, and starts `main.py` with `--listen 0.0.0.0` so fal can route traffic to the UI and API.
 
 ---
 
