@@ -87,52 +87,7 @@ class RealtimeOutput(RootModel):
 
 
 class MatrixWebRTC2(fal.App):
-    machine_type = "GPU-H100"
-    startup_timeout = 1200
     TURN_EXPIRY_SECONDS = 600
-
-    requirements = [
-        "accelerate>=1.1.1",
-        "aiortc",
-        "av",
-        "dashscope",
-        "diffusers",
-        "dominate",
-        "easydict",
-        "einops",
-        "flask",
-        "flask-socketio",
-        "ftfy",
-        "git+https://github.com/openai/CLIP.git",
-        "huggingface-hub[cli]",
-        "imageio",
-        "imageio-ffmpeg",
-        "lmdb",
-        "matplotlib",
-        "nvidia-tensorrt",
-        "numpy",
-        "omegaconf",
-        "onnx",
-        "onnxconverter_common",
-        "onnxruntime",
-        "onnxscript",
-        "open_clip_torch",
-        "opencv-python>=4.9.0.80",
-        "pydantic",
-        "pycocotools",
-        "safetensors",
-        "scikit-image",
-        "sentencepiece",
-        "starlette",
-        "tokenizers>=0.20.3",
-        "torch==2.6.0",
-        "torchao==0.12.0",
-        "torchvision",
-        "tqdm",
-        "transformers>=4.49.0",
-        "wandb",
-        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl",
-    ]
 
     def setup(self):
         import os
@@ -726,7 +681,7 @@ class MatrixWebRTC2(fal.App):
 
 
 if __name__ == "__main__":
-    from matrix2_client import run
+    from fal_demo_matrix_webrtc.client import run
 
     info = MatrixWebRTC2.spawn()
     print(f"App ID: {info.application}")

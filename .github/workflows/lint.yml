@@ -28,7 +28,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install -e .
+        python -m pip install fal pydantic pyyaml
 
     - name: Install uv
       run: |

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-basic-webrtc-video"
+version = "0.0.1"
+description = "Deploy a basic WebRTC video stream on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic>=2.0",
+    "aiortc",
+    "av",
+    "numpy",
+    "opencv-python>=4.9.0.80",
+]
+
+[project.optional-dependencies]
+client = [
+    "fal-client",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_basic_webrtc_video*"]
+
+[tool.fal.apps.basic-webrtc-video]
+python_entry_point = "fal_demo_basic_webrtc_video.app:BasicWebRTCVideo"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "M"

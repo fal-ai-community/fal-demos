@@ -11,19 +11,19 @@ Minimal WebRTC demo with no model inference:
 Use `fal run` for local dev or `fal deploy` for a hosted endpoint.
 
 ```bash
-fal run webrtc.py
+fal run fal_demo_basic_webrtc_video/app.py
 ```
 
 or
 
 ```bash
-fal deploy webrtc.py
+fal deploy fal_demo_basic_webrtc_video/app.py
 ```
 
 ## Python client
 
 ```bash
-python webrtc_client.py --endpoint myuser/myapp/realtime
+python -m fal_demo_basic_webrtc_video.client --endpoint myuser/myapp/realtime
 ```
 
 Controls:

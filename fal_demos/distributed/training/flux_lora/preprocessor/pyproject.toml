@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-flux-preprocessor"
+version = "0.0.1"
+description = "Deploy Flux LoRA preprocessing on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic",
+    "torch==2.4.0",
+    "torchvision",  # Required by moondream
+    "diffusers==0.30.3",
+    "transformers==4.46.0",
+    "tokenizers==0.20.1",
+    "sentencepiece",
+    "accelerate==1.4.0",
+    "pyzmq==26.0.0",
+    "huggingface_hub==0.26.5",
+    "moondream==0.0.5",
+    "einops",  # Required by moondream
+    "pillow>=10.0.0",
+    "timm",  # Required by moondream vision encoder
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_flux_preprocessor*"]
+
+[tool.fal.apps.flux-preprocessor]
+python_entry_point = "fal_demo_flux_preprocessor.app:FluxPreprocessorApp"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-H100"
+num_gpus = 2
+keep_alive = 300
+min_concurrency = 0
+max_concurrency = 2

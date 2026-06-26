@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-sana"
+version = "0.0.1"
+description = "Deploy Sana on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic",
+    "torch==2.6.0",
+    "accelerate==1.6.0",
+    "transformers==4.51.3",
+    "diffusers @ git+https://github.com/huggingface/diffusers.git@f4fa3beee7f49b80ce7a58f9c8002f43299175c9",
+    "hf_transfer==0.1.9",
+    "peft==0.15.0",
+    "sentencepiece==0.2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_sana*"]
+
+[tool.fal.apps.sana]
+python_entry_point = "fal_demo_sana.app:Sana"
+auth = "private"
+requirements = [
+    ".",
+    "--extra-index-url",
+    "https://download.pytorch.org/whl/cu124",
+]
+python_version = "3.11"
+# Choose machine type from https://docs.fal.ai/private-serverless-models/resources/
+machine_type = "GPU-H100"
+# The worker will be kept alive for 10 minutes after the last request.
+keep_alive = 600
+# The minimum number of concurrent workers to keep alive. If set to 0, the app starts up when the first request is received.
+min_concurrency = 0
+# The maximum number of concurrent workers to acquire. It helps limit the number of concurrent requests to the app.
+max_concurrency = 10

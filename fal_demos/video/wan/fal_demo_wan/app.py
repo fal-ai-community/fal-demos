@@ -88,34 +88,7 @@ class WanT2VResponse(BaseModel):
     seed: int = Field(description="The seed used for generation.")
 
 
-class Wan(
-    fal.App,
-    name="wan",
-    min_concurrency=0,
-    max_concurrency=1,
-    keep_alive=300,
-):  # type: ignore
-    machine_type = "GPU-H100"
-    requirements = [
-        "torch==2.6.0",
-        "torchvision==0.21.0",
-        "opencv-python>=4.9.0.80",
-        "diffusers==0.32.2",
-        "transformers==4.49.0",
-        "tokenizers==0.21.0",
-        "accelerate==1.4.0",
-        "tqdm",
-        "imageio",
-        "easydict",
-        "ftfy",
-        "dashscope",
-        "imageio-ffmpeg",
-        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post1/flash_attn-2.7.0.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl",
-        "numpy==1.24.4",
-        "xfuser==0.4.1",
-        "fal-client",
-    ]
-
+class Wan(fal.App):
     def setup(self):
         """Initialize the app by cloning the repository, downloading models, and starting the server."""
         from pathlib import Path

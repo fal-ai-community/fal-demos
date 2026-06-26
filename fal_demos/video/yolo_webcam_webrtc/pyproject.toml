@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-yolo-webcam-webrtc"
+version = "0.0.1"
+description = "Deploy YOLO webcam WebRTC on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic>=2.0",
+    "aiortc",
+    "av",
+    "numpy",
+    "opencv-python",
+    "ultralytics",
+]
+
+[project.optional-dependencies]
+client = [
+    "fal-client",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_yolo_webcam_webrtc*"]
+
+[tool.fal.apps.yolo-webcam-webrtc]
+python_entry_point = "fal_demo_yolo_webcam_webrtc.app:WebcamWebRtc"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-H100"

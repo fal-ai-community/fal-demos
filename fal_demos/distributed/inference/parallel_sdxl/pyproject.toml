@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-parallel-sdxl"
+version = "0.0.1"
+description = "Deploy distributed SDXL inference on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic",
+    "accelerate==1.4.0",
+    "diffusers==0.30.3",
+    "huggingface_hub==0.26.5",
+    "opencv-python",
+    "torch==2.6.0+cu124",
+    "torchvision==0.21.0+cu124",
+    "transformers==4.47.1",
+    "pyzmq==26.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_parallel_sdxl*"]
+
+[tool.fal.apps.parallel-sdxl]
+python_entry_point = "fal_demo_parallel_sdxl.app:ExampleDistributedApp"
+auth = "private"
+requirements = [
+    ".",
+    "--extra-index-url",
+    "https://download.pytorch.org/whl/cu124",
+]
+python_version = "3.11"
+machine_type = "GPU-H100"
+num_gpus = 2

@@ -1,0 +1,7 @@
+[tool.fal.apps.vllm]
+auth = "private"
+machine_type = "GPU-H100"
+exposed_port = 8000
+
+[tool.fal.apps.vllm.image]
+dockerfile = "Dockerfile"

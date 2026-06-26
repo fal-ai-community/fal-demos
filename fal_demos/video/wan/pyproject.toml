@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fal-demo-wan"
+version = "0.0.1"
+description = "Deploy Wan on fal"
+requires-python = ">=3.11"
+dependencies = [
+    "fal",
+    "pydantic",
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "opencv-python>=4.9.0.80",
+    "diffusers==0.32.2",
+    "transformers==4.49.0",
+    "tokenizers==0.21.0",
+    "accelerate==1.4.0",
+    "tqdm",
+    "imageio",
+    "easydict",
+    "ftfy",
+    "dashscope",
+    "imageio-ffmpeg",
+    "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post1/flash_attn-2.7.0.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl",
+    "numpy==1.24.4",
+    "xfuser==0.4.1",
+    "fal-client",
+]
+
+[tool.setuptools.packages.find]
+include = ["fal_demo_wan*"]
+
+[tool.fal.apps.wan]
+python_entry_point = "fal_demo_wan.app:Wan"
+auth = "private"
+requirements = ["."]
+python_version = "3.11"
+machine_type = "GPU-H100"
+keep_alive = 300
+min_concurrency = 0
+max_concurrency = 1

@@ -1,0 +1,7 @@
+[tool.fal.apps.ollama]
+auth = "private"
+machine_type = "GPU-RTX5090"
+exposed_port = 11434
+
+[tool.fal.apps.ollama.image]
+image = "ollama/ollama"

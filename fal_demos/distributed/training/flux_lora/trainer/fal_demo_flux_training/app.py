@@ -16,9 +16,9 @@ from fal.toolkit import File, download_file
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from fal_demos.distributed.training.flux_lora.trainer.training_worker import (
-    FluxLoRATrainingWorker,
-)
+from fal_demo_flux_training.training_worker import FluxLoRATrainingWorker
+
+NUM_GPUS = 2
 
 
 class CompleteTrainingRequest(BaseModel):
@@ -119,26 +119,6 @@ class FluxLoRATrainingApp(fal.App):
     - Can scale independently
     """
 
-    machine_type = "GPU-H100"
-    num_gpus = 2
-    keep_alive = 3000
-    min_concurrency = 1
-    max_concurrency = 1
-
-    requirements = [
-        "torch==2.4.0",
-        "diffusers==0.30.3",
-        "transformers==4.46.0",
-        "tokenizers==0.20.1",
-        "sentencepiece",
-        "peft==0.12.0",
-        "safetensors==0.4.4",
-        "accelerate==1.4.0",
-        "pyzmq==26.0.0",
-        "huggingface_hub==0.26.5",
-        "fal-client",  # For calling preprocessor app
-    ]
-
     async def setup(self) -> None:
         """
         Initialize the training runner.
@@ -162,11 +142,11 @@ class FluxLoRATrainingApp(fal.App):
         # Create training runner (uses all 8 GPUs)
         self.runner = DistributedRunner(
             worker_cls=FluxLoRATrainingWorker,
-            world_size=self.num_gpus,
+            world_size=NUM_GPUS,
         )
 
         # Start training workers
-        print(f"Starting {self.num_gpus} training workers...")
+        print(f"Starting {NUM_GPUS} training workers...")
         await self.runner.start(model_path=model_path)
 
         print("Training workers ready!")
@@ -222,7 +202,7 @@ class FluxLoRATrainingApp(fal.App):
             )
 
             # Step 3: Train LoRA (on our 8 GPUs)
-            print(f"Training LoRA with {self.num_gpus} GPUs...")
+            print(f"Training LoRA with {NUM_GPUS} GPUs...")
             train_result = await self.runner.invoke(
                 {
                     "training_data_path": preprocessed_path,
@@ -303,7 +283,7 @@ class FluxLoRATrainingApp(fal.App):
                 )
 
                 # Step 3: Train LoRA with streaming (on our GPUs)
-                print(f"Training LoRA with {self.num_gpus} GPUs (streaming)...")
+                print(f"Training LoRA with {NUM_GPUS} GPUs (streaming)...")
                 async for event in self.runner.stream(
                     {
                         "training_data_path": preprocessed_path,
@@ -347,7 +327,7 @@ class FluxLoRATrainingApp(fal.App):
             )
 
             # Train on our 8 GPUs
-            print(f"Training with {self.num_gpus} GPUs...")
+            print(f"Training with {NUM_GPUS} GPUs...")
             result = await self.runner.invoke(
                 {
                     "training_data_path": training_data_path,
@@ -401,7 +381,7 @@ class FluxLoRATrainingApp(fal.App):
                 )
 
                 # Train with streaming enabled
-                print(f"Training with {self.num_gpus} GPUs (streaming)...")
+                print(f"Training with {NUM_GPUS} GPUs (streaming)...")
                 async for event in self.runner.stream(
                     {
                         "training_data_path": training_data_path,

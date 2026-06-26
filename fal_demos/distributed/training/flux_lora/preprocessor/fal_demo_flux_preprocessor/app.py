@@ -17,9 +17,9 @@ from fal.toolkit import File, download_file
 from fastapi import Response
 from pydantic import BaseModel, Field
 
-from fal_demos.distributed.training.flux_lora.preprocessor.preprocessor_worker import (
-    FluxPreprocessorWorker,
-)
+from fal_demo_flux_preprocessor.preprocessor_worker import FluxPreprocessorWorker
+
+NUM_GPUS = 2
 
 
 class PreprocessRequest(BaseModel):
@@ -62,28 +62,6 @@ class FluxPreprocessorApp(fal.App):
     - Returns URL to preprocessed data
     """
 
-    machine_type = "GPU-H100"
-    num_gpus = 2
-    keep_alive = 300
-    min_concurrency = 0
-    max_concurrency = 2
-
-    requirements = [
-        "torch==2.4.0",
-        "torchvision",  # Required by moondream
-        "diffusers==0.30.3",
-        "transformers==4.46.0",
-        "tokenizers==0.20.1",
-        "sentencepiece",
-        "accelerate==1.4.0",
-        "pyzmq==26.0.0",
-        "huggingface_hub==0.26.5",
-        "moondream==0.0.5",
-        "einops",  # Required by moondream
-        "pillow>=10.0.0",
-        "timm",  # Required by moondream vision encoder
-    ]
-
     async def setup(self) -> None:
         """
         Initialize the preprocessing runner.
@@ -106,11 +84,11 @@ class FluxPreprocessorApp(fal.App):
         # Create preprocessing runner
         self.runner = DistributedRunner(
             worker_cls=FluxPreprocessorWorker,
-            world_size=self.num_gpus,
+            world_size=NUM_GPUS,
         )
 
         # Start workers
-        print(f"Starting {self.num_gpus} preprocessing workers...")
+        print(f"Starting {NUM_GPUS} preprocessing workers...")
         await self.runner.start(model_path=model_path)
 
         print("Preprocessing workers ready!")
@@ -147,9 +125,7 @@ class FluxPreprocessorApp(fal.App):
             request_id = str(int(time.time() * 1000000))  # Microsecond timestamp
 
             # Preprocess in parallel across all GPUs
-            print(
-                f"Preprocessing with {self.num_gpus} GPUs (request_id: {request_id})..."
-            )
+            print(f"Preprocessing with {NUM_GPUS} GPUs (request_id: {request_id})...")
             result = await self.runner.invoke(
                 {
                     "images_zip_url": images_zip_path,

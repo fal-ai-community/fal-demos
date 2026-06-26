@@ -64,16 +64,7 @@ class RealtimeOutput(RootModel):
 
 
 class WebcamWebRtc(fal.App):
-    machine_type = "GPU-H100"
     TURN_EXPIRY_SECONDS = 600
-    requirements = [
-        "aiortc",
-        "av",
-        "numpy",
-        "opencv-python",
-        "pydantic",
-        "ultralytics",
-    ]
 
     def setup(self):
         import os
@@ -369,7 +360,7 @@ def create_yolo_track(source_track, yolo_model):
 if __name__ == "__main__":
     import asyncio
 
-    from yolo_client import run
+    from fal_demo_yolo_webcam_webrtc.client import run
 
     info = WebcamWebRtc.spawn()
     print(f"App ID: {info.application}")
