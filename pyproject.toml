@@ -60,7 +60,7 @@ image = "ollama/ollama"
 
 [tool.fal.apps.comfyui]
 auth = "private"
-machine_type = "GPU-H100"
+machine_type = "GPU-RTX5090"
 exposed_port = 8188
 
 [tool.fal.apps.comfyui.image]
