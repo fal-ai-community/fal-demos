@@ -17,6 +17,25 @@ dependencies = [
     "fal @ git+https://github.com/fal-ai/fal.git#subdirectory=projects/fal"
 ]
 
+[project.optional-dependencies]
+birefnet = [
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "transformers==4.51.3",
+    "accelerate==1.6.0",
+    "safetensors==0.5.3",
+    "numpy==1.26.4",
+    "timm==1.0.15",
+    "kornia==0.8.0",
+    "einops==0.8.1",
+    "scipy==1.15.2",
+    "scikit-image==0.25.2",
+    "opencv-python-headless==4.11.0.86",
+    "prettytable==3.16.0",
+    "pillow==11.2.1",
+    "hf_transfer==0.1.9",
+]
+
 [tool.fal.apps]
 sana = { auth = "shared", ref = "fal_demos/image/sana.py::Sana", no_scale=true }
 kokoro = { auth = "shared", ref = "fal_demos/tts/kokoro.py::Kokoro", no_scale=true }
@@ -25,6 +44,7 @@ wan = { auth = "shared", ref = "fal_demos/video/wan.py::Wan", no_scale=true }
 hunyuan3d = {auth = "shared", ref = "fal_demos/image/hunyuan3d.py::Hunyuan3D", no_scale=true }
 matrix-webrtc = { auth = "shared", ref = "fal_demos/video/matrix_webrtc/matrix.py::MatrixGame2", no_scale=true }
 
+
 # Distributed inference examples
 parallel-sdxl = { auth = "shared", ref = "fal_demos/distributed/inference/parallel_sdxl/app.py::ExampleDistributedApp", no_scale=true }
 xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py::XFuserApp", no_scale=true }
@@ -32,6 +52,16 @@ xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py
 # Distributed training examples
 flux-preprocessor = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp", no_scale=true }
 flux-training = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp", no_scale=true }
+
+[tool.fal.apps.birefnet-rmbg]
+auth = "shared"
+python_entry_point = "fal_demos.image.birefnet_rmbg:BiRefNetRMBG"
+machine_type = "GPU-RTXPRO6000"
+python_version = "3.11"
+requirements = [".[birefnet]"]
+min_concurrency = 0
+max_concurrency = 2
+keep_alive = 300
 
 # LLM examples
 [tool.fal.apps.vllm]
