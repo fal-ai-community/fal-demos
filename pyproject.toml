@@ -57,3 +57,11 @@ exposed_port = 11434
 
 [tool.fal.apps.ollama.image]
 image = "ollama/ollama"
+
+[tool.fal.apps.comfyui]
+auth = "private"
+machine_type = "GPU-H100"
+exposed_port = 8188
+
+[tool.fal.apps.comfyui.image]
+dockerfile = "fal_demos/image/comfyui/Dockerfile"

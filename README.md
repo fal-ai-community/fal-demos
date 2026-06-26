@@ -51,6 +51,10 @@ Finally, two public endpoints are defined: `generate` at the root path ([`fal_de
 
 The comments at the end of the file ([`fal_demos/image/sana.py#L214-L219`](fal_demos/image/sana.py#L214-L219)) provide instructions on how to run the app using `fal run` and example URLs for testing the deployed endpoints.
 
+### 1.1 ComfyUI
+
+The [`fal_demos/image/comfyui/Dockerfile`](fal_demos/image/comfyui/Dockerfile) demo hosts the ComfyUI web/API server as a private container app. It exposes port `8188`, uses a CUDA PyTorch base image, installs the ComfyUI runtime dependencies, and starts `main.py` with `--listen 0.0.0.0` so fal can route traffic to the UI and API.
+
 ---
 
 ## 2. 3D Object Generation with Hunyuan3D (via Fal Client)
