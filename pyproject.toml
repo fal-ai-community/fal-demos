@@ -36,25 +36,40 @@ birefnet = [
     "hf_transfer==0.1.9",
 ]
 
-[tool.fal.apps]
-sana = { auth = "shared", ref = "fal_demos/image/sana.py::Sana", no_scale=true }
-kokoro = { auth = "shared", ref = "fal_demos/tts/kokoro.py::Kokoro", no_scale=true }
-diffrhythm = { auth = "shared", ref = "fal_demos/audio/diffrhythm.py::DiffRhythm", no_scale=true }
-wan = { auth = "shared", ref = "fal_demos/video/wan.py::Wan", no_scale=true }
-hunyuan3d = {auth = "shared", ref = "fal_demos/image/hunyuan3d.py::Hunyuan3D", no_scale=true }
-matrix-webrtc = { auth = "shared", ref = "fal_demos/video/matrix_webrtc/matrix.py::MatrixGame2", no_scale=true }
+[tool.fal.apps.sana]
+ref = "fal_demos/image/sana.py::Sana"
+
+[tool.fal.apps.kokoro]
+ref = "fal_demos/tts/kokoro.py::Kokoro"
+
+[tool.fal.apps.diffrhythm]
+ref = "fal_demos/audio/diffrhythm.py::DiffRhythm"
+
+[tool.fal.apps.wan]
+ref = "fal_demos/video/wan.py::Wan"
+
+[tool.fal.apps.hunyuan3d]
+ref = "fal_demos/image/hunyuan3d.py::Hunyuan3D"
+
+[tool.fal.apps.matrix-webrtc]
+ref = "fal_demos/video/matrix_webrtc/matrix.py::MatrixGame2"
 
 
 # Distributed inference examples
-parallel-sdxl = { auth = "shared", ref = "fal_demos/distributed/inference/parallel_sdxl/app.py::ExampleDistributedApp", no_scale=true }
-xfuser = { auth = "shared", ref = "fal_demos/distributed/inference/xfuser/app.py::XFuserApp", no_scale=true }
+[tool.fal.apps.parallel-sdxl]
+ref = "fal_demos/distributed/inference/parallel_sdxl/app.py::ExampleDistributedApp"
+
+[tool.fal.apps.xfuser]
+ref = "fal_demos/distributed/inference/xfuser/app.py::XFuserApp"
 
 # Distributed training examples
-flux-preprocessor = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp", no_scale=true }
-flux-training = { auth = "shared", ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp", no_scale=true }
+[tool.fal.apps.flux-preprocessor]
+ref = "fal_demos/distributed/training/flux_lora/preprocessor/flux_preprocessor_app.py::FluxPreprocessorApp"
+
+[tool.fal.apps.flux-training]
+ref = "fal_demos/distributed/training/flux_lora/trainer/app.py::FluxLoRATrainingApp"
 
 [tool.fal.apps.birefnet-rmbg]
-auth = "shared"
 python_entry_point = "fal_demos.image.birefnet_rmbg:BiRefNetRMBG"
 machine_type = "GPU-RTXPRO6000"
 python_version = "3.11"
@@ -65,7 +80,6 @@ keep_alive = 300
 
 # LLM examples
 [tool.fal.apps.vllm]
-auth = "private"
 machine_type = "GPU-H100"
 exposed_port = 8000
 
@@ -73,7 +87,6 @@ exposed_port = 8000
 dockerfile = "fal_demos/llm/vllm/Dockerfile"
 
 [tool.fal.apps.sglang]
-auth = "private"
 machine_type = "GPU-H100"
 exposed_port = 30000
 
@@ -81,7 +94,6 @@ exposed_port = 30000
 dockerfile = "fal_demos/llm/sglang/Dockerfile"
 
 [tool.fal.apps.ollama]
-auth = "private"
 machine_type = "GPU-RTX5090"
 exposed_port = 11434
 
@@ -89,7 +101,6 @@ exposed_port = 11434
 image = "ollama/ollama"
 
 [tool.fal.apps.comfyui]
-auth = "private"
 machine_type = "GPU-RTX5090"
 exposed_port = 18188
 
