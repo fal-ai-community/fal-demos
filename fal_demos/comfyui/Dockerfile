@@ -1,4 +1,0 @@
-FROM ghcr.io/ai-dock/comfyui@sha256:fca2636bc177da48f25a546f0f55100b14ecb65ea26c674993370e549ba868c0
-
-ENV COMFYUI_ARGS="--listen 0.0.0.0" \
-    COMFYUI_PORT_HOST=8188
