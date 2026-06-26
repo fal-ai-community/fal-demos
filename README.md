@@ -53,7 +53,7 @@ The comments at the end of the file ([`fal_demos/image/sana.py#L214-L219`](fal_d
 
 ### 1.1 ComfyUI
 
-The ComfyUI demo hosts the ComfyUI web/API server as a private container app using the `ghcr.io/ai-dock/comfyui:latest-cuda` image. It exposes port `8188`, which AI-Dock uses for the ComfyUI service.
+The ComfyUI demo hosts the ComfyUI web/API server as a private container app using the `ghcr.io/ai-dock/comfyui:v2-cuda-12.1.1-cudnn8-devel-22.04-v0.2.7` image pinned by digest. It exposes port `8188`, which AI-Dock uses for the ComfyUI service.
 
 ---
 
