@@ -65,3 +65,4 @@ exposed_port = 8188
 
 [tool.fal.apps.comfyui.image]
 image = "ghcr.io/ai-dock/comfyui@sha256:fca2636bc177da48f25a546f0f55100b14ecb65ea26c674993370e549ba868c0"
+cmd = ["bash", "-lc", "export COMFYUI_ARGS='--listen 0.0.0.0'; export COMFYUI_PORT_HOST=8188; exec init.sh"]
