@@ -53,7 +53,7 @@ The comments at the end of the file ([`fal_demos/image/sana.py#L214-L219`](fal_d
 
 ### 1.1 ComfyUI
 
-The [`fal_demos/comfyui/Dockerfile`](fal_demos/comfyui/Dockerfile) demo hosts the ComfyUI web/API server as a private container app using an AI-Dock ComfyUI image pinned by digest. It exposes port `8188`, which AI-Dock uses for the ComfyUI service, and sets `COMFYUI_ARGS="--listen 0.0.0.0"` so the service can be reached through fal routing.
+The [`fal_demos/comfyui/Dockerfile`](fal_demos/comfyui/Dockerfile) demo hosts the ComfyUI web/API server as a private container app using an AI-Dock ComfyUI image pinned by digest. It exposes ComfyUI's port `18188` and sets `COMFYUI_ARGS="--listen 0.0.0.0"` so the service can be reached through fal routing.
 
 ---
 

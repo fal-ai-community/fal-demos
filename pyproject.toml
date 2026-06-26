@@ -61,7 +61,7 @@ image = "ollama/ollama"
 [tool.fal.apps.comfyui]
 auth = "private"
 machine_type = "GPU-RTX5090"
-exposed_port = 8188
+exposed_port = 18188
 
 [tool.fal.apps.comfyui.image]
 dockerfile = "fal_demos/comfyui/Dockerfile"
