@@ -101,7 +101,7 @@ exposed_port = 11434
 image = "ollama/ollama"
 
 [tool.fal.apps.comfyui]
-machine_type = "GPU-RTX5090"
+machine_type = "GPU-A6000"
 exposed_port = 18188
 
 [tool.fal.apps.comfyui.image]
