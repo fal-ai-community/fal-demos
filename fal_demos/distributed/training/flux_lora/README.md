@@ -1,16 +1,21 @@
 # Flux LoRA Training on Multiple GPUs
 
-A complete multi-GPU LoRA training pipeline on fal Serverless, split into two
+A complete multi-GPU LoRA training pipeline on fal Serverless, split into
 separately deployed apps:
 
 | App | What it does | GPUs |
 |-----|--------------|------|
 | [`preprocessor/`](preprocessor/) | Auto-captioning, trigger word injection, VAE encoding, T5/CLIP encoding | `num_gpus` |
-| [`trainer/`](trainer/) | DDP LoRA training on the preprocessed latents | `num_gpus` |
+| [`trainer/`](trainer/) | DDP LoRA training, launched with `fal.distributed` | `num_gpus` |
+| [`trainer_torchrun/`](trainer_torchrun/) | The same training, launched with a plain spawn | `num_gpus` |
 
 The trainer calls the preprocessor over the network with `fal_client`, so the
 two scale independently and the training box does not sit idle while images are
 being encoded.
+
+The two trainers are interchangeable. Both import the identical training code
+from [`core.py`](core.py) and differ only in how the ranks are started, which
+is the cleanest way to show that the choice of launcher is yours.
 
 ## Is `fal.distributed` required for multi-GPU?
 
@@ -22,15 +27,22 @@ works here: `torchrun`, `accelerate launch`, Lightning Fabric, or a plain
 `fal.distributed` is a convenience layer over `torch.multiprocessing.spawn` plus
 NCCL on localhost, with ZMQ to move payloads between your app process and the
 ranks. It saves you writing the spawn, teardown, and IPC glue, and it gives you
-streaming intermediate results for free. This demo uses it.
+streaming intermediate results for free. It is a convenience, not a
+requirement.
 
 Pick based on what you already have:
 
-- **Starting fresh, or you want streaming progress out of the box** — use
-  `fal.distributed`, as this demo does.
-- **You already have a working DDP trainer** — keep your launcher. Shell out to
-  it from `setup()` and leave your training code untouched. This is what fal's
-  own production trainers do.
+| | [`trainer/`](trainer/) (`fal.distributed`) | [`trainer_torchrun/`](trainer_torchrun/) (own launcher) |
+|---|---|---|
+| Rank startup | `DistributedRunner` | `multiprocessing` spawn you control |
+| App ↔ ranks | ZMQ, handled for you | HTTP to rank 0 on localhost, yours to write |
+| Streaming progress | Built in, via `add_streaming_result` | Write it yourself |
+| Failure supervision | Handled for you | Yours to write |
+| Porting an existing trainer | Restructure into `DistributedWorker` | Keep your launcher as-is |
+
+Start fresh with `fal.distributed`. Bring an existing DDP trainer, and keep
+your launcher: shell out to it from `setup()` and leave your training code
+untouched. That second shape is what fal's own production trainers use.
 
 `fal.distributed` *is* required for
 [multi-node](https://fal.ai/docs/documentation/serverless/distributed/multi-node)
@@ -46,7 +58,8 @@ Two things will cost you an afternoon otherwise:
   first collective can fail with CUDA error 401 while NVLS sets up its memory
   pools. Falling back to ring/tree collectives is safe on a single node.
 
-Sketch:
+[`trainer_torchrun/app.py`](trainer_torchrun/app.py) is the full working
+version. In outline:
 
 ```python
 class Trainer(fal.App, min_concurrency=1, max_concurrency=1):
@@ -84,6 +97,9 @@ Deploy the preprocessor first, since the trainer calls it by name:
 ```bash
 fal deploy fal_demos/distributed/training/flux_lora/preprocessor/app.py
 fal deploy fal_demos/distributed/training/flux_lora/trainer/app.py
+
+# ...or the same trainer with your own launcher instead of fal.distributed
+fal deploy fal_demos/distributed/training/flux_lora/trainer_torchrun/app.py
 ```
 
 Then point the trainer at your own preprocessor deployment via the
@@ -118,8 +134,10 @@ preprocessor scales to zero between batches.
 
 ## Cold starts
 
-This demo keeps base weights on `/data` and otherwise stays deliberately simple.
-For production training apps, four levers do most of the work:
+Both trainers keep base weights on `/data`, and `trainer_torchrun/` also starts
+its ranks before downloading so the two overlap. Beyond that the demo stays
+deliberately simple. For production training apps, four more levers do most of
+the work:
 
 - **Keep weights on `/data`, never baked into the image.** Declare `data_mounts`
   and download in `setup()`. `/data` is shared across all your runners and
