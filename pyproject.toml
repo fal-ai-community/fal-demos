@@ -54,6 +54,15 @@ ref = "fal_demos/image/hunyuan3d.py::Hunyuan3D"
 [tool.fal.apps.matrix-webrtc]
 ref = "fal_demos/video/matrix_webrtc/matrix.py::MatrixGame2"
 
+[tool.fal.apps.wma-matrix-game]
+ref = "fal_demos/video/wma/matrix_game.py::MatrixGameApp"
+
+[tool.fal.apps.wma-video-restyle]
+ref = "fal_demos/video/wma/video_restyle.py::RestyleApp"
+
+[tool.fal.apps.wma-robot-world-model]
+ref = "fal_demos/video/wma/robot_world_model.py::RobotWorldModel"
+
 
 # Distributed inference examples
 [tool.fal.apps.parallel-sdxl]
