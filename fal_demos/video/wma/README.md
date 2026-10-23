@@ -1,21 +1,23 @@
 # WMA World Model Examples
 
-Three apps built on the [World Model Accelerator](https://fal.ai/docs/documentation/development/wma) (`fal.wma`).
-Each app streams video over WebRTC and takes control messages from a client.
-All three are experimental and pin `fal[wma]==1.82.1`.
+Four apps built on the [World Model Accelerator](https://fal.ai/docs/documentation/development/wma) (`fal.wma`).
+Each app streams media over WebRTC (video, or audio for the voice app) and takes control messages from a client.
+All four are experimental and pin `fal[wma]==1.82.1`.
 
 | App | Pattern | Class | Python | Docs |
 | --- | --- | --- | --- | --- |
 | `matrix_game.py` | Keyboard-controlled world model (`CommandWorld` profile). Matrix-Game 2.0 reacts to move and look commands. | `MatrixGameApp` | 3.12 | [Deploy Real-time World Model](https://fal.ai/docs/examples/video-generation/deploy-realtime-world-model) |
 | `video_restyle.py` | Camera in, video out. StreamDiffusionV2 restyles a webcam stream with a text prompt. | `RestyleApp` | 3.11 | [Deploy Real-time Video Restyle](https://fal.ai/docs/examples/video-generation/deploy-realtime-video-restyle) |
 | `robot_world_model.py` | Chunked robot policy and world model (`ConfiguredSession` profile). Cosmos3-Edge-Policy-DROID returns an action chunk and predicted video. Uses a custom container image. | `RobotWorldModel` | 3.13 | [Deploy a Robot World Model](https://fal.ai/docs/examples/video-generation/deploy-robot-world-model) |
+| `voice_chat.py` | Microphone in, voice out. Moshi (Kyutai, full duplex) listens and speaks at the same time and streams its own words as `text` messages. | `VoiceChatApp` | 3.12 | Not published yet |
 
 Each app needs one H100 runner and a fal account with deployment access and WMA bridge access.
+The app owner namespace (the `X` in `fal.run/X/app`) must also be enabled for fal-managed TURN. Without it, sessions connect only when the runner is directly reachable, which fails on many runners and networks.
 
 ## Prerequisites
 
 Create a uv environment with the Python version of the app you want to run, then install the SDK.
-`fal run` needs a local Python that matches the app, so use 3.12 for `matrix_game.py`, 3.11 for `video_restyle.py` and 3.13 for `robot_world_model.py`.
+`fal run` needs a local Python that matches the app, so use 3.12 for `matrix_game.py` and `voice_chat.py`, 3.11 for `video_restyle.py` and 3.13 for `robot_world_model.py`.
 
 ```bash
 uv venv --python 3.12
@@ -34,10 +36,12 @@ Run these commands from the repository root.
 fal run fal_demos/video/wma/matrix_game.py::MatrixGameApp
 fal run fal_demos/video/wma/video_restyle.py::RestyleApp
 fal run fal_demos/video/wma/robot_world_model.py::RobotWorldModel
+fal run fal_demos/video/wma/voice_chat.py::VoiceChatApp
 
 fal deploy fal_demos/video/wma/matrix_game.py::MatrixGameApp --auth private
 fal deploy fal_demos/video/wma/video_restyle.py::RestyleApp --auth private
 fal deploy fal_demos/video/wma/robot_world_model.py::RobotWorldModel --auth private
+fal deploy fal_demos/video/wma/voice_chat.py::VoiceChatApp --auth private
 ```
 
 The first start of a runner is slow because it downloads weights (and, for the robot app, builds the container image).
@@ -50,6 +54,7 @@ Select **Connect**, then send one of the example messages.
 - **Matrix-Game:** send **Walk forward**, **Stop** or **Restart**.
 - **Video restyle:** allow the camera. Send a prompt example such as **Claymation** and read the `status` messages.
 - **Robot world model:** send **Configure**, wait for `configured`, then send **Step from predicted state** and **New instruction**.
+- **Voice chat:** allow the microphone and start talking. Moshi answers out loud, and its words arrive as `text` messages. Send **New conversation** to start over.
 
 To connect from your own page, use the [WMA browser client](https://fal.ai/docs/documentation/development/wma-browser).
 For the SDK reference, read the [WMA guide](https://fal.ai/docs/documentation/development/wma).
