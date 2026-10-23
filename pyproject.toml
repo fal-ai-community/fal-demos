@@ -63,6 +63,9 @@ ref = "fal_demos/video/wma/video_restyle.py::RestyleApp"
 [tool.fal.apps.wma-robot-world-model]
 ref = "fal_demos/video/wma/robot_world_model.py::RobotWorldModel"
 
+[tool.fal.apps.wma-voice-chat]
+ref = "fal_demos/video/wma/voice_chat.py::VoiceChatApp"
+
 
 # Distributed inference examples
 [tool.fal.apps.parallel-sdxl]
