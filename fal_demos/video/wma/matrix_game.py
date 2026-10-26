@@ -9,7 +9,9 @@ keyboard and mouse conditioning for each generated chunk.
 import asyncio
 import concurrent.futures
 import logging
+import shutil
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,17 +170,29 @@ class Engine:
         from huggingface_hub import snapshot_download
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        repo = DATA_DIR / "Matrix-Game"
+        repo = DATA_DIR / f"Matrix-Game-{UPSTREAM_SHA}"
         if not (repo / "Matrix-Game-2").is_dir():
-            repo.mkdir(parents=True, exist_ok=True)
-            for args in (
-                ("init", "-q"),
-                ("remote", "add", "origin", UPSTREAM_URL),
-                ("sparse-checkout", "set", "Matrix-Game-2"),
-                ("fetch", "-q", "--depth", "1", "origin", UPSTREAM_SHA),
-                ("checkout", "-q", "FETCH_HEAD"),
-            ):
-                subprocess.run(["git", "-C", str(repo), *args], check=True)
+            # Clone into a private folder, then move it into place. A failed or
+            # concurrent first start then never leaves a partial clone in /data.
+            staging = Path(tempfile.mkdtemp(dir=DATA_DIR, prefix="clone-"))
+            staging.chmod(0o755)  # mkdtemp uses 0700, and this folder becomes the clone.
+            try:
+                for args in (
+                    ("init", "-q"),
+                    ("remote", "add", "origin", UPSTREAM_URL),
+                    ("sparse-checkout", "set", "Matrix-Game-2"),
+                    ("fetch", "-q", "--depth", "1", "origin", UPSTREAM_SHA),
+                    ("checkout", "-q", "FETCH_HEAD"),
+                ):
+                    subprocess.run(["git", "-C", str(staging), *args], check=True)
+                try:
+                    staging.rename(repo)
+                except OSError:
+                    # Another runner moved its clone into place first.
+                    if not (repo / "Matrix-Game-2").is_dir():
+                        raise
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
         self.code = repo / "Matrix-Game-2"
         sys.path.insert(0, str(self.code))
 
@@ -512,28 +526,28 @@ class MatrixGameApp(
         "torchvision==0.21.0",
         "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/"
         "flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl",
-        "numpy<2.3",
-        "pillow",
-        "diffusers",
-        "transformers>=4.49.0",
-        "tokenizers>=0.20.3",
-        "accelerate>=1.1.1",
-        "huggingface_hub",
-        "omegaconf",
-        "einops",
-        "easydict",
-        "ftfy",
-        "regex",
-        "scipy",
-        "safetensors",
-        "sentencepiece",
-        "open_clip_torch",
-        "opencv-python-headless",
-        "imageio",
-        "av",
-        "tqdm",
-        "packaging",
-        "requests",
+        "numpy==2.2.6",
+        "pillow==12.3.0",
+        "diffusers==0.41.0",
+        "transformers==5.20.2",
+        "tokenizers==0.23.3",
+        "accelerate==1.15.0",
+        "huggingface_hub==1.33.0",
+        "omegaconf==2.4.0",
+        "einops==0.8.2",
+        "easydict==1.13",
+        "ftfy==6.3.1",
+        "regex==2026.9.29",
+        "scipy==1.18.1",
+        "safetensors==0.8.0",
+        "sentencepiece==0.2.2",
+        "open_clip_torch==3.3.0",
+        "opencv-python-headless==5.0.0.93",
+        "imageio==2.38.1",
+        "av==17.1.0",
+        "tqdm==4.70.1",
+        "packaging==26.3",
+        "requests==2.34.2",
         "pydantic>=2,<3",
     ]
     realtime_contract = CONTRACT

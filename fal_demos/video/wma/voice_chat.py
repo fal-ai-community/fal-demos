@@ -21,7 +21,7 @@ import fal.wma
 
 logger = logging.getLogger(__name__)
 
-# Weights, pinned to one revision (CC-BY-4.0). The moshi package is MIT and Apache-2.0.
+# Weights, pinned to one revision (CC-BY-4.0). The moshi Python package is MIT.
 MOSHI_REPO = "kyutai/moshiko-pytorch-bf16"
 MOSHI_REVISION = "2bfc9ae6e89079a5cc7ed2a68436010d91a3d289"
 

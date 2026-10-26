@@ -9,8 +9,10 @@ changes the style while the stream runs.
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import urllib.request
@@ -86,14 +88,25 @@ def prepare_runtime():
     root = DATA_ROOT / f"StreamDiffusionV2-{REPO_SHA}"
     if not (root / "configs" / "wan_causal_dmd_v2v.yaml").is_file():
         DATA_ROOT.mkdir(parents=True, exist_ok=True)
-        archive = DATA_ROOT / f"{REPO_SHA}.tar.gz"
-        urllib.request.urlretrieve(
-            f"https://github.com/{REPO}/archive/{REPO_SHA}.tar.gz", archive
-        )
-        with tarfile.open(archive) as tar:
-            # The archive is a pinned commit. Python 3.11 runners may lack extract filters.
-            tar.extractall(DATA_ROOT)
-        archive.unlink()
+        # Download and extract into a private folder, then move the code into place.
+        # A failed or concurrent first start then never leaves a partial tree in /data.
+        staging = Path(tempfile.mkdtemp(dir=DATA_ROOT, prefix="extract-"))
+        try:
+            archive = staging / "code.tar.gz"
+            urllib.request.urlretrieve(
+                f"https://github.com/{REPO}/archive/{REPO_SHA}.tar.gz", archive
+            )
+            with tarfile.open(archive) as tar:
+                # The archive is a pinned commit. Python 3.11 runners may lack extract filters.
+                tar.extractall(staging)
+            try:
+                (staging / f"StreamDiffusionV2-{REPO_SHA}").rename(root)
+            except OSError:
+                # Another runner moved its copy into place first.
+                if not (root / "configs" / "wan_causal_dmd_v2v.yaml").is_file():
+                    raise
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     # The upstream code looks for wan_models/ and ckpts/ under this root.
     os.environ["STREAMDIFFUSIONV2_ROOT"] = str(root)
