@@ -193,7 +193,7 @@ class RobotWorldModel(fal.wma.App):
                     "type": "configure",
                     "instruction_version": 1,
                     "instruction": "Put the marker in the cup.",
-                    "image_url": "https://v3b.fal.media/files/b/0aaf5cf4/vFh0QpYtc-Fqt-21peWW-_droid_observation.png",
+                    "image_url": "https://raw.githubusercontent.com/fal-ai-community/fal-demos/main/fal_demos/video/wma/droid_observation.png",
                 },
             ),
             fal.wma.MessageExample(
