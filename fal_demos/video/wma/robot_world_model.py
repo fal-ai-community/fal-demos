@@ -21,6 +21,7 @@ from fal.wma import profile
 
 COSMOS_FRAMEWORK_URL = "https://github.com/NVIDIA/cosmos-framework.git"
 COSMOS_FRAMEWORK_SHA = "9a70e64d2ad7ff1417484d12d10fb121b270baaf"
+# Weights, pinned to one revision (NVIDIA OpenMDW 1.1, which allows commercial use).
 CHECKPOINT = "nvidia/Cosmos3-Edge-Policy-DROID"
 CHECKPOINT_REVISION = "a7c7288f9b6ac1684e993007b0f9703dd26e58ef"
 
