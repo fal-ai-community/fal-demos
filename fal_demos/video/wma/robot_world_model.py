@@ -124,7 +124,9 @@ class ActionChunkMessage(BaseModel):
     step_id: int
     instruction_version: int
     chunk_index: int
-    actions: List[List[float]] = Field(description="CHUNK_STEPS rows of 7 joints + gripper.")
+    actions: List[List[float]] = Field(
+        description="CHUNK_STEPS rows of 7 joints + gripper."
+    )
     fps: int = FPS
     frames: int = Field(description="Predicted video frames decoded for this chunk.")
     generation_seconds: float
@@ -363,7 +365,9 @@ class RobotSession:
         try:
             message = ConfigureMessage.model_validate(raw)
         except ValidationError as exc:
-            return await self.end_with("invalid_configuration", str(exc.errors()[0]["msg"]))
+            return await self.end_with(
+                "invalid_configuration", str(exc.errors()[0]["msg"])
+            )
         self.configuring = True
         try:
             image = await asyncio.to_thread(fetch_image, message.image_url)
@@ -403,7 +407,9 @@ class RobotSession:
             )
         # The newest text wins. It reaches the model at the start of the next chunk.
         self.pending = (message.instruction_version, message.instruction)
-        self.send(InstructionPendingMessage(instruction_version=message.instruction_version))
+        self.send(
+            InstructionPendingMessage(instruction_version=message.instruction_version)
+        )
 
     async def on_step(self, raw):
         if not self.configured:
@@ -413,7 +419,9 @@ class RobotSession:
         except ValidationError as exc:
             return self.invalid(raw, exc)
         if self.busy:
-            return self.fail("busy", "A chunk is still generating.", step_id=message.step_id)
+            return self.fail(
+                "busy", "A chunk is still generating.", step_id=message.step_id
+            )
         self.busy = True
         try:
             await self.run_chunk(message)
@@ -444,12 +452,18 @@ class RobotSession:
             self.pending = None
             self.send(InstructionAppliedMessage(instruction_version=self.version))
         joints = step.joint_position if step.joint_position is not None else self.joints
-        gripper = step.gripper_position if step.gripper_position is not None else self.gripper
-        observation = self.build_observation(self.instruction, self.image, joints, gripper)
+        gripper = (
+            step.gripper_position if step.gripper_position is not None else self.gripper
+        )
+        observation = self.build_observation(
+            self.instruction, self.image, joints, gripper
+        )
 
         started = time.monotonic()
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self.executor, self.service.infer, observation)
+        result = await loop.run_in_executor(
+            self.executor, self.service.infer, observation
+        )
         seconds = time.monotonic() - started
         if self.closed:
             return

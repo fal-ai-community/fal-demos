@@ -85,7 +85,10 @@ class ResetApplied(BaseModel):
     scene: int
 
 
-ClientMessage = Annotated[Union[Commands, Setup, Reset], Field(discriminator="type")]
+ClientMessage = Annotated[
+    Union[Commands, Setup, Reset],  # type: ignore[valid-type]
+    Field(discriminator="type"),
+]
 ServerMessage = Annotated[
     Union[
         Configured, ResetApplied, fal.wma.ErrorMessage, fal.wma.StreamExhaustedMessage
@@ -114,9 +117,7 @@ CONTRACT = fal.wma.RealtimeContract(
             name="Turn right while walking",
             payload={"type": "commands", "active": ["forward", "look_right"]},
         ),
-        fal.wma.MessageExample(
-            name="Stop", payload={"type": "commands", "active": []}
-        ),
+        fal.wma.MessageExample(name="Stop", payload={"type": "commands", "active": []}),
         fal.wma.MessageExample(name="Restart", payload={"type": "reset"}),
     ),
 )
@@ -175,7 +176,8 @@ class Engine:
             # Clone into a private folder, then move it into place. A failed or
             # concurrent first start then never leaves a partial clone in /data.
             staging = Path(tempfile.mkdtemp(dir=DATA_DIR, prefix="clone-"))
-            staging.chmod(0o755)  # mkdtemp uses 0700, and this folder becomes the clone.
+            # mkdtemp uses 0700, and this folder becomes the clone.
+            staging.chmod(0o755)
             try:
                 for args in (
                     ("init", "-q"),
@@ -390,9 +392,7 @@ class WorldSession:
         self.restart: Optional[tuple] = None
         self.flushed = 0  # Billed frames dropped on restart. Event loop only.
         self.configured = False
-        self.thread = threading.Thread(
-            target=self.run, name="matrix-game", daemon=True
-        )
+        self.thread = threading.Thread(target=self.run, name="matrix-game", daemon=True)
         session.on_message("commands", self.on_commands)
         session.on_message("setup", self.on_setup)
         session.on_message("reset", self.on_reset)
@@ -502,7 +502,9 @@ class WorldSession:
         Runs after the generation thread has stopped and before billing is finalized.
         """
         undelivered = self.flushed + self.frames.qsize()
-        self.session.cap_billable_units(max(0.0, self.session.billable_units - undelivered))
+        self.session.cap_billable_units(
+            max(0.0, self.session.billable_units - undelivered)
+        )
 
     async def stop_and_join(self) -> None:
         self.stop.set()
@@ -585,7 +587,10 @@ class MatrixGameApp(
         session.defer(world.cap_billing)
         session.defer(world.stop_and_join)
 
-        servers, _ = await fal.wma.RunnerIceConfig.from_bridge().build_ice_servers_async(
+        (
+            servers,
+            _,
+        ) = await fal.wma.RunnerIceConfig.from_bridge().build_ice_servers_async(
             session.offer.ice_servers, forwarded_status=session.offer.ice_status
         )
         track = fal.wma.make_video_queue_track(world.frames, FPS)

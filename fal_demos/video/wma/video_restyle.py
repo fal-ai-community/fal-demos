@@ -156,9 +156,9 @@ def prepare_runtime():
 
     # Run a short stream so kernel compilation happens before the first session.
     def noise(frames):
-        return (
-            torch.rand(1, 3, frames, SIZE, SIZE, device="cuda") * 2 - 1
-        ).to(torch.bfloat16)
+        return (torch.rand(1, 3, frames, SIZE, SIZE, device="cuda") * 2 - 1).to(
+            torch.bfloat16
+        )
 
     stream, _ = manager.start_stream_session(
         "warm up", noise(FIRST_CHUNK_FRAMES), NOISE_SCALE
@@ -286,7 +286,9 @@ class RestyleSession:
         """
         await asyncio.sleep(0)  # Let queued put_output callbacks run first.
         undelivered = self.dropped_output_frames + self.out.qsize()
-        self.session.cap_billable_units(max(0.0, self.session.billable_units - undelivered))
+        self.session.cap_billable_units(
+            max(0.0, self.session.billable_units - undelivered)
+        )
 
     async def shutdown(self):
         self.stopped.set()

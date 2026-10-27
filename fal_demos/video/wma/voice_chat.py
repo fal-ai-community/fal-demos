@@ -30,7 +30,9 @@ FRAME_SAMPLES = 1920  # One Mimi frame: 80 ms at 24 kHz (12.5 frames per second)
 FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
 PACKET_SAMPLES = 480  # 20 ms per outbound WebRTC audio frame.
 MAX_BACKLOG_FRAMES = 4  # Waiting input frames (320 ms). Older ones are dropped.
-OUTPUT_QUEUE_FRAMES = 25  # Generated frames waiting to play (2 s). Older ones are dropped.
+OUTPUT_QUEUE_FRAMES = (
+    25  # Generated frames waiting to play (2 s). Older ones are dropped.
+)
 # Moshi's text tokens 0 and 3 are padding, not words.
 TEXT_PADDING_TOKENS = (0, 3)
 MAX_SESSION_SECONDS = 300
@@ -156,7 +158,9 @@ def make_audio_queue_track(queue):
             else:
                 chunk = np.zeros(PACKET_SAMPLES, dtype=np.float32)
             pcm = (np.clip(chunk, -1, 1) * 32767).astype(np.int16)
-            frame = av.AudioFrame.from_ndarray(pcm[None, :], format="s16", layout="mono")
+            frame = av.AudioFrame.from_ndarray(
+                pcm[None, :], format="s16", layout="mono"
+            )
             frame.sample_rate = SAMPLE_RATE
             frame.pts = self.pts
             frame.time_base = fractions.Fraction(1, SAMPLE_RATE)
