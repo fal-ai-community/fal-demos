@@ -225,6 +225,8 @@ The [`fal_demos/video/matrix_webrtc/`](fal_demos/video/matrix_webrtc/) demo stre
 
 The [`fal_demos/video/yolo_webcam_webrtc/`](fal_demos/video/yolo_webcam_webrtc/) demo sends a webcam stream over WebRTC, runs YOLO on each frame, and streams the annotated video back to the browser. Run instructions are in [`fal_demos/video/yolo_webcam_webrtc/README.md`](fal_demos/video/yolo_webcam_webrtc/README.md).
 
+The [`fal_demos/video/wma/`](fal_demos/video/wma/) folder holds four World Model Accelerator (`fal.wma`) apps: a keyboard-controlled Matrix-Game world model, a webcam video restyle, a robot policy world model, and a real-time Moshi voice chat. Run instructions are in [`fal_demos/video/wma/README.md`](fal_demos/video/wma/README.md).
+
 **Key fal Concepts Demonstrated**:
 
 The pipeline consists of two main components:
