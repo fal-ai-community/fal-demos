@@ -239,7 +239,9 @@ The pipeline consists of two main components:
 - Gathers preprocessed tensors from all GPUs
 
 **Trainer** ([`fal_demos/distributed/training/flux_lora/trainer/`](fal_demos/distributed/training/flux_lora/trainer/)):
-- `FluxLoRATrainingWorker` extends `DistributedWorker` for DDP training
+- The training code itself lives in [`core.py`](fal_demos/distributed/training/flux_lora/core.py) and is launcher-agnostic
+- `FluxLoRATrainingWorker` is a thin adapter onto `DistributedWorker`
+- [`trainer_torchrun/`](fal_demos/distributed/training/flux_lora/trainer_torchrun/) runs the same core with a plain spawn instead, for teams bringing an existing DDP launcher
 - Each GPU loads the Flux transformer and adds LoRA adapters
 - Models are wrapped with `torch.nn.parallel.DistributedDataParallel` for gradient synchronization
 - Implements proper Flux flow matching loss

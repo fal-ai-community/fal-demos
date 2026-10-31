@@ -63,7 +63,7 @@ class FluxPreprocessorApp(fal.App):
     """
 
     machine_type = "GPU-H100"
-    num_gpus = 2
+    num_gpus = 8
     keep_alive = 300
     min_concurrency = 0
     max_concurrency = 2
@@ -88,7 +88,7 @@ class FluxPreprocessorApp(fal.App):
         """
         Initialize the preprocessing runner.
 
-        Downloads Flux weights and starts 8 GPU workers for preprocessing.
+        Downloads Flux weights and starts one preprocessing worker per GPU.
         """
         import os
         from huggingface_hub import snapshot_download
